@@ -1,0 +1,43 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "trellis-gui"
+version = "0.0.1"
+description = "A DearPyGui spreadsheet GUI over the Trellis engine."
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+authors = [{ name = "Matthew Carven", email = "matthewcarven@gmail.com" }]
+keywords = ["trellis", "spreadsheet", "dearpygui", "gui"]
+
+# The declared dependencies. `trellis` + `trellis-keymap` are the in-house engine
+# and keymap-contract packages; until they're on a package index, resolve them
+# from the sibling Trellis checkout via requirements.txt (editable), then this:
+#   pip install -r requirements.txt    # installs dearpygui + editable trellis/keymap
+#   pip install -e .                   # installs this app (sees the deps satisfied)
+dependencies = [
+    "dearpygui>=2",
+    "trellis>=0.0.1",
+    "trellis-keymap>=0.1.0",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=7"]
+
+[project.scripts]
+trellis-gui = "dpg_grid_hybrid:main"
+
+# Flat module layout — package the app modules explicitly (tests stay out).
+[tool.hatch.build.targets.wheel]
+only-include = [
+    "dpg_grid_hybrid.py",
+    "dpg_grid.py",
+    "dpg_grid_inplace.py",
+    "grid_model.py",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["."]
+addopts = "-ra"

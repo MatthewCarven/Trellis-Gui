@@ -1,0 +1,11 @@
+# Dependencies for the Trellis DearPyGui app.
+# Install from THIS folder:  pip install -r requirements.txt
+#
+# `trellis` (the engine) and `trellis-keymap` (the key-language contract) are the
+# in-house monorepo packages — the same ones the terminal UI uses. Until they're
+# published to a package index they install editable from the sibling Trellis
+# checkout, so engine/keymap changes flow through live. Adjust the paths if your
+# Trellis checkout lives elsewhere.
+dearpygui>=2
+-e ../Trellis
+-e ../Trellis/packages/trellis-keymap
