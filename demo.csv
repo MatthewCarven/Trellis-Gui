@@ -1,0 +1,6 @@
+Item,Qty,Price,Total
+Apples,3,2,=B2*C2
+Bread,2,3,=B3*C3
+Milk,1,4,=B4*C4
+Eggs,2,5,=B5*C5
+,,Grand total,=SUM(D2:D5)
