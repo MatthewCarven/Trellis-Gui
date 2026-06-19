@@ -21,6 +21,7 @@ dependencies = [
     "dearpygui>=2",
     "trellis>=0.0.1",
     "trellis-keymap>=0.1.0",
+    "trellis-undo>=0.1.0",
 ]
 
 [project.optional-dependencies]

@@ -9,3 +9,4 @@
 dearpygui>=2
 -e ../Trellis
 -e ../Trellis/packages/trellis-keymap
+-e ../Trellis/packages/trellis-undo

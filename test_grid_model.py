@@ -7,8 +7,10 @@ propagation through the engine, and — the point of the whole keymap extraction
 
 from __future__ import annotations
 
+import pytest
+
 import trellis_keymap as km
-from trellis import Workbook
+from trellis import Workbook, read_csv
 
 from grid_model import GridModel
 
@@ -133,3 +135,69 @@ def test_printable_returns_edit_intent():
     feed(m, "down")  # cursor (1,0)
     intent = feed(m, "k", char="k")
     assert intent == ("edit", 1, 0, "k")
+
+
+# ----------------------------------------------------- undo / redo (Part 7)
+def test_undo_redo_through_keymap():
+    m, sh = model()
+    m.commit(0, 0, "10")
+    m.commit(0, 0, "20")
+    feed(m, "ctrl+z")             # ExcelKeymap maps Ctrl+Z -> Undo()
+    assert sh["A1"].value == 10
+    feed(m, "ctrl+y")             # Ctrl+Y -> Redo()
+    assert sh["A1"].value == 20
+
+
+def test_undo_restores_formula_and_recalc():
+    m, sh = model()
+    m.commit(0, 0, "2")           # A1
+    m.commit(1, 0, "3")           # A2
+    m.commit(2, 0, "=A1+A2")      # A3 == 5
+    m.commit(2, 0, "999")         # clobber A3
+    assert m.display(2, 0) == "999"
+    feed(m, "ctrl+z")             # undo the clobber -> formula returns, recalcs
+    assert sh.get((2, 0)).formula == "=A1+A2"
+    assert m.display(2, 0) == "5"
+
+
+def test_undo_log_attached_to_sheet_meta():
+    m, sh = model()
+    assert sh.meta["undo"] is m.undo_log
+
+
+# ------------------------------------------------------------- save (CSV)
+def test_dirty_flag_lifecycle(tmp_path):
+    m, _ = model()
+    assert m.dirty is False
+    m.commit(0, 0, "x")
+    assert m.dirty is True
+    m.save(str(tmp_path / "out.csv"))
+    assert m.dirty is False
+
+
+def test_save_round_trips_formulas(tmp_path):
+    m, _ = model()
+    m.commit(0, 0, "2")           # A1
+    m.commit(1, 0, "3")           # A2
+    m.commit(2, 0, "=A1+A2")      # A3 == 5
+    out = tmp_path / "rt.csv"
+    assert m.save(str(out)) == str(out)
+    wb = read_csv(str(out), formulas=True)
+    sh2 = wb[next(iter(wb))]
+    assert sh2.get((2, 0)).formula == "=A1+A2"   # formula survived the round-trip
+    assert sh2.get((2, 0)).value == 5
+
+
+def test_save_uses_remembered_path(tmp_path):
+    out = tmp_path / "remembered.csv"
+    m, _ = model()
+    m.path = str(out)
+    m.commit(0, 0, "hi")
+    m.save()                      # no arg -> falls back to self.path
+    assert out.exists()
+
+
+def test_save_without_path_raises():
+    m, _ = model()
+    with pytest.raises(ValueError):
+        m.save()

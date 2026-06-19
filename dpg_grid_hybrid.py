@@ -14,6 +14,7 @@ Run:  python dpg_grid_hybrid.py demo.csv
 from __future__ import annotations
 
 import sys
+from pathlib import Path
 
 import dearpygui.dearpygui as dpg
 
@@ -34,6 +35,8 @@ class HybridGrid:
     BAR = "hy_bar"
     ADDR = "hy_addr"
     MODE = "hy_mode"
+    SAVE = "hy_save"
+    SAVE_DIALOG = "hy_save_dialog"
 
     def __init__(self, model: GridModel):
         self.model = model
@@ -57,14 +60,24 @@ class HybridGrid:
             with dpg.theme_component(dpg.mvInputText):
                 dpg.add_theme_color(dpg.mvThemeCol_FrameBg, (40, 120, 70))
 
-        # The formula / status bar: address | cursor cell source | mode.
+        # The formula / status bar: address | cursor cell source | mode | save state.
         with dpg.group(horizontal=True, parent=parent):
             dpg.add_text("A1", tag=self.ADDR)
-            dpg.add_input_text(tag=self.BAR, width=-90, readonly=True, hint="(formula / value)")
+            dpg.add_input_text(tag=self.BAR, width=-260, readonly=True, hint="(formula / value)")
             dpg.add_text("[READY]", tag=self.MODE)
+            dpg.add_text("", tag=self.SAVE)
         dpg.add_separator(parent=parent)
         dpg.add_group(tag=self.HOLDER, parent=parent)
         self._rebuild_table()
+
+        # A hidden Save As dialog, shown only when the sheet has no path yet.
+        with dpg.file_dialog(
+            tag=self.SAVE_DIALOG, directory_selector=False, show=False,
+            default_filename="untitled.csv", width=520, height=400,
+            callback=self._on_save_as,
+        ):
+            dpg.add_file_extension(".csv")
+            dpg.add_file_extension(".*")
 
         with dpg.handler_registry():
             dpg.add_key_press_handler(callback=self._on_key)
@@ -132,6 +145,11 @@ class HybridGrid:
         dpg.set_value(self.MODE, "[EDIT]" if self.editing else "[READY]")
         if not self.editing:
             dpg.set_value(self.BAR, self.model.edit_text(cr, cc))
+        self._update_save_state()
+
+    def _update_save_state(self) -> None:
+        name = Path(self.model.path).name if self.model.path else "(unsaved)"
+        dpg.set_value(self.SAVE, f"{name} *" if self.model.dirty else name)
 
     # ---------------------------------------------------------- key handling
     def _on_key(self, sender, app_data) -> None:
@@ -148,14 +166,21 @@ class HybridGrid:
             elif kp.key == "escape":
                 self._cancel_active()
             return
+        # Ctrl+S saves. Save is a frontend gesture, not a keymap Action (the
+        # ExcelKeymap leaves it unbound, exactly as the TUI does), so catch it
+        # here before handing the key to the keymap.
+        if kp.ctrl and kp.key == "s":
+            self._save()
+            return
         action = km.ExcelKeymap().handle(kp, self.model.key_context())
         intent = self.model.apply_action(action)
         if intent and intent[0] == "edit":
             self._begin_edit(seed=intent[3])
-        elif isinstance(action, (km.Move, km.MoveTo, km.Select, km.Operate, km.EnterMode)):
+        elif isinstance(action, (km.Move, km.MoveTo, km.Select, km.Operate, km.EnterMode, km.Undo, km.Redo)):
             self.refresh()
             if dpg.does_item_exist(self.cell_tag(*self.model.cursor)):
                 dpg.focus_item(self.cell_tag(*self.model.cursor))
+
 
     # ------------------------------------------------------------- editing
     def _begin_edit(self, *, seed: str | None) -> None:
@@ -192,7 +217,30 @@ class HybridGrid:
         if self.editing:
             dpg.set_value(self.BAR, dpg.get_value(sender))
 
+    # --------------------------------------------------------------- saving
+    def _save(self) -> None:
+        """Ctrl+S: write to the loaded file, or pop a Save As dialog when the
+        sheet has no path yet."""
+        if not self.model.path:
+            dpg.show_item(self.SAVE_DIALOG)
+            return
+        self._save_to(self.model.path)
+
+    def _on_save_as(self, sender, app_data) -> None:  # pragma: no cover (UI dialog)
+        path = app_data.get("file_path_name") if isinstance(app_data, dict) else None
+        if path:
+            self._save_to(path)
+
+    def _save_to(self, path: str) -> None:
+        try:
+            self.model.save(path)
+        except Exception as exc:  # surface the failure in the status line
+            dpg.set_value(self.SAVE, f"save failed: {exc}")
+            return
+        self._update_save_state()
+
     # -------------------------------------------------- per-cell handlers
+
     def _on_cell_focus(self, sender, app_data, user_data) -> None:
         if not self.editing:
             self.model.cursor = user_data

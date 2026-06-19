@@ -5,7 +5,8 @@ from __future__ import annotations
 import dearpygui.dearpygui as dpg
 import pytest
 
-from trellis import Workbook
+import trellis_keymap as km
+from trellis import Workbook, read_csv
 
 from dpg_grid_hybrid import HybridGrid
 from grid_model import GridModel
@@ -81,3 +82,45 @@ def test_escape_cancels(ctx):
     assert g.editing is False
     assert dpg.get_value(g.cell_tag(0, 0)) == "10"
     assert sh["A1"].value == 10
+
+
+# ------------------------------------------------------------- save / undo
+def test_save_to_writes_and_clears_dirty(ctx, tmp_path):
+    g, m, sh = _grid([("A1", 2), ("A2", 3), ("A3", "=A1+A2")])
+    m.dirty = True
+    out = tmp_path / "hy.csv"
+    g._save_to(str(out))
+    assert out.exists() and m.dirty is False
+    wb = read_csv(str(out), formulas=True)
+    sh2 = wb[next(iter(wb))]
+    assert sh2.get((2, 0)).formula == "=A1+A2"   # formulas round-trip
+    assert dpg.get_value(g.SAVE) == "hy.csv"     # status shows the saved file
+
+
+def test_ctrl_s_saves_to_remembered_path(ctx, tmp_path):
+    out = tmp_path / "remembered.csv"
+    g, m, sh = _grid([("A1", 1)])
+    m.path = str(out)
+    m.dirty = True
+    g._save()                                    # path set -> writes directly, no dialog
+    assert out.exists() and m.dirty is False
+
+
+def test_undo_repaints_grid(ctx):
+    g, m, sh = _grid([("A1", 10)])
+    g._on_key(None, dpg.mvKey_F2)
+    dpg.set_value(g.cell_tag(0, 0), "20")
+    g._on_key(None, dpg.mvKey_Return)            # commit: A1 = 20
+    assert sh["A1"].value == 20
+    m.apply_action(km.Undo())                    # (Ctrl+Z; modifier polling is headless)
+    g.refresh()
+    assert dpg.get_value(g.cell_tag(0, 0)) == "10"   # repaint reflects the undo
+    assert sh["A1"].value == 10
+
+
+def test_dirty_marker_in_status(ctx):
+    g, m, sh = _grid([("A1", 1)])
+    g._on_key(None, dpg.mvKey_F2)
+    dpg.set_value(g.cell_tag(0, 0), "2")
+    g._on_key(None, dpg.mvKey_Return)
+    assert dpg.get_value(g.SAVE) == "(unsaved) *"

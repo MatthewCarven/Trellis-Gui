@@ -17,6 +17,7 @@ from dataclasses import dataclass
 
 import trellis_keymap as km
 from trellis import FormulaError, Sheet, infer_value, to_a1
+from trellis_undo import attach as _attach_undo
 
 # A windowed view never draws the whole (unbounded) sheet — only enough cells to
 # cover the data plus a small working margin. Matthew's plan, realised here.
@@ -62,7 +63,14 @@ class GridModel:
     are executed by handing an Action from `trellis_keymap` to `apply_action`.
     """
 
-    def __init__(self, sheet: Sheet, *, min_rows: int = MIN_ROWS, min_cols: int = MIN_COLS):
+    def __init__(
+        self,
+        sheet: Sheet,
+        *,
+        min_rows: int = MIN_ROWS,
+        min_cols: int = MIN_COLS,
+        path: str | None = None,
+    ):
         self.sheet = sheet
         self.cursor: tuple[int, int] = (0, 0)
         self.anchor: tuple[int, int] = (0, 0)  # fixed corner of a selection
@@ -70,6 +78,15 @@ class GridModel:
         self.mode: str = "default"
         self.min_rows = min_rows
         self.min_cols = min_cols
+        # Where Ctrl+S writes: the file we loaded from, if any (None => Save As).
+        self.path = path
+        # True once anything has been edited since the last save/load — drives
+        # the GUI's unsaved-changes marker.
+        self.dirty = False
+        # Undo/redo: attach a trellis_undo.UndoLog to the sheet exactly as the
+        # TUI does (also reachable at ``sheet.meta["undo"]``). Attached AFTER any
+        # CSV load, so opening a file is not itself an undoable step.
+        self.undo_log = _attach_undo(sheet)
         # The tracked bounds. Always anchored at A1 for the spike; the lower-
         # right grows with the data and the cursor.
         self.ul: tuple[int, int] = (0, 0)
@@ -136,7 +153,23 @@ class GridModel:
             self.sheet[a1] = text
         else:
             self.sheet[a1] = infer_value(text)
+        self.dirty = True
         self._recompute_window()
+
+    def save(self, path: str | None = None) -> str:
+        """Write the sheet to CSV (formulas preserved — round-trips with
+        ``read_csv(..., formulas=True)``). Uses ``path`` if given, else the
+        path we loaded from; raises ``ValueError`` if neither exists (the
+        caller should prompt — a Save As). Clears the dirty flag, returns the
+        path written to."""
+        target = path or self.path
+        if not target:
+            raise ValueError("no save path: this sheet was not loaded from a file")
+        self.sheet.to_csv(target, formulas=True)
+        self.path = target
+        self.dirty = False
+        return target
+
 
     # -------------------------------------------------------- keymap execution
     def key_context(self) -> km.KeyContext:
@@ -177,9 +210,18 @@ class GridModel:
         elif isinstance(action, km.Operate):
             if action.op == "clear":
                 self._clear(action.rect)
+        elif isinstance(action, km.Undo):
+            if self.undo_log.undo():
+                self.dirty = True
+            self._recompute_window()
+        elif isinstance(action, km.Redo):
+            if self.undo_log.redo():
+                self.dirty = True
+            self._recompute_window()
         elif isinstance(action, km.BeginEdit):
             return ("edit", self.cursor[0], self.cursor[1], action.seed)
         return None
+
 
     # --------------------------------------------------------------- internals
     def _move(self, dr: int, dc: int, extend: bool) -> None:
@@ -208,6 +250,7 @@ class GridModel:
         for rr in range(t, b + 1):
             for cc in range(l, r + 1):
                 self.sheet.delete(to_a1(rr, cc))
+        self.dirty = True
         self._recompute_window()
 
     @staticmethod

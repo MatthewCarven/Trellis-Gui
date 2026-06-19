@@ -155,7 +155,7 @@ class InplaceGrid:
         intent = self.model.apply_action(action)
         if intent and intent[0] == "edit":
             self._begin_edit(seed=intent[3])
-        elif isinstance(action, (km.Move, km.MoveTo, km.Select, km.Operate, km.EnterMode)):
+        elif isinstance(action, (km.Move, km.MoveTo, km.Select, km.Operate, km.EnterMode, km.Undo, km.Redo)):
             self.refresh()
             if dpg.does_item_exist(self.cell_tag(*self.model.cursor)):
                 dpg.focus_item(self.cell_tag(*self.model.cursor))

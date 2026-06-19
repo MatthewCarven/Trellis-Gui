@@ -38,8 +38,8 @@ adapter" the keymap contract always anticipated, now in its DPG flavour. The
   editing **+** the formula bar kept up top as a combined formula/status line
   (address, cursor-cell source, READY/EDIT), **+ readable fixed-width columns**.
   `python dpg_grid_hybrid.py demo.csv`.
-- `test_grid_model.py` (15) + `test_dpg_headless.py` (9) + `test_inplace_headless.py`
-  (7) + `test_hybrid_headless.py` (6) = **37 headless tests** — see "What's verified".
+- `test_grid_model.py` (22) + `test_dpg_headless.py` (9) + `test_inplace_headless.py`
+  (7) + `test_hybrid_headless.py` (10) = **48 headless tests** — see "What's verified".
 - `demo.csv` — a tiny budget with live formulas (`=B2*C2`, `=SUM(D2:D5)`).
 
 ## Run it
@@ -107,7 +107,7 @@ Frictions variant B (and so C) surfaces (the point of the exercise — eyeball t
 
 ## What's verified vs. what to check on first run
 
-**Verified headlessly (37 tests, no GPU):** the model logic, the commit policy,
+**Verified headlessly (48 tests, no GPU):** the model logic, the commit policy,
 **recalc propagation showing up in the grid** (both variants), the keymap driving
 the cursor, type-to-edit seeding, the window growing to cover new far cells, and
 variant B's full modal flow (F2/type begins, Enter/Tab commit + move, Esc
@@ -129,8 +129,11 @@ the construction code and callbacks are exercised for real.
 - **One redraw strategy.** Here the table rebuilds only when the window's size
   changes; values repaint via `set_value`. Fine at CSV scale; revisit if a
   window ever gets large.
-- Undo (attach `trellis-undo` exactly as the TUI does), mouse select, and tabs
-  are all "more of the same" and intentionally absent.
+- **Undo/redo and save — now built** on the hybrid candidate: `Ctrl+Z`/`Ctrl+Y`
+  drive a `trellis-undo` log attached exactly as the TUI does, and `Ctrl+S`
+  writes the CSV back (`sheet.to_csv(formulas=True)`), with a Save As dialog for
+  the no-path case. Mouse select and multi-sheet tabs are still "more of the
+  same" and intentionally absent.
 
 ## Status
 

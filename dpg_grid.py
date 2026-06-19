@@ -226,13 +226,15 @@ class DpgGrid:
 
 # --------------------------------------------------------------------------
 def load_model(argv: list[str]) -> GridModel:
+    path: str | None = None
     if argv and Path(argv[0]).exists():
-        wb = read_csv(argv[0], formulas=True)  # CSV-as-spreadsheet: formulas live
+        path = argv[0]
+        wb = read_csv(path, formulas=True)  # CSV-as-spreadsheet: formulas live
     else:
         wb = Workbook()
         wb.add_sheet("Sheet1")
     sheet = wb[next(iter(wb))]  # first sheet by name (Workbook iterates names)
-    return GridModel(sheet)
+    return GridModel(sheet, path=path)
 
 
 def main(argv: list[str] | None = None) -> None:  # pragma: no cover
