@@ -27,15 +27,6 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
-# --- spike convenience: run straight from a checkout, no install needed.
-# A real frontend just declares `trellis` + `trellis-keymap` as deps; this
-# block puts the in-repo source on the path so `python dpg_grid.py` works
-# before (or without) installing anything but dearpygui. ---
-_REPO = Path(__file__).resolve().parents[2]
-for _src in (_REPO / "src", _REPO / "packages" / "trellis-keymap" / "src"):
-    if _src.is_dir() and str(_src) not in sys.path:
-        sys.path.insert(0, str(_src))
-
 import dearpygui.dearpygui as dpg
 
 import trellis_keymap as km

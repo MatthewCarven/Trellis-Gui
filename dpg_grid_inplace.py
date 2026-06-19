@@ -20,13 +20,6 @@ Run:  python dpg_grid_inplace.py demo.csv   (compare with dpg_grid.py)
 from __future__ import annotations
 
 import sys
-from pathlib import Path
-
-# Same checkout-convenience bootstrap as dpg_grid.py.
-_REPO = Path(__file__).resolve().parents[2]
-for _src in (_REPO / "src", _REPO / "packages" / "trellis-keymap" / "src"):
-    if _src.is_dir() and str(_src) not in sys.path:
-        sys.path.insert(0, str(_src))
 
 import dearpygui.dearpygui as dpg
 

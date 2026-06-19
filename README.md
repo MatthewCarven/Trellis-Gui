@@ -44,19 +44,19 @@ adapter" the keymap contract always anticipated, now in its DPG flavour. The
 
 ## Run it
 
-The script puts the in-repo `trellis` + `trellis-keymap` sources on its own path,
-so from a checkout you only need DearPyGui — no install of the packages required:
+Install the deps — DearPyGui plus the engine and keymap (editable, from the
+sibling `../Trellis` checkout) — then run any variant:
 
 ```
-pip install dearpygui
-python spikes/dpg-grid/dpg_grid_hybrid.py   spikes/dpg-grid/demo.csv   # variant C  <- the candidate
-python spikes/dpg-grid/dpg_grid.py          spikes/dpg-grid/demo.csv   # variant A (formula bar)
-python spikes/dpg-grid/dpg_grid_inplace.py  spikes/dpg-grid/demo.csv   # variant B (in-place)
+pip install -r requirements.txt
+python dpg_grid_hybrid.py   demo.csv   # variant C  <- the candidate
+python dpg_grid.py          demo.csv   # variant A (formula bar)
+python dpg_grid_inplace.py  demo.csv   # variant B (in-place)
 ```
 
-(If you'd rather run against installed packages, `pip install -e . -e
-packages/trellis-keymap` and the path bootstrap simply no-ops. `pytest` works
-from this dir too — a `conftest.py` does the same path setup.)
+(`requirements.txt` pulls in `dearpygui` and installs `-e ../Trellis` +
+`-e ../Trellis/packages/trellis-keymap`; adjust those paths if your Trellis
+checkout lives elsewhere. `pytest` works from this dir too once they're installed.)
 
 **Try (both):** arrow-key around; land on `D2` (shows `6`, formula `=B2*C2`);
 change `B2` to `10` and commit — `D2` and the grand total recompute in the grid.
@@ -107,7 +107,7 @@ Frictions variant B (and so C) surfaces (the point of the exercise — eyeball t
 
 ## What's verified vs. what to check on first run
 
-**Verified headlessly (31 tests, no GPU):** the model logic, the commit policy,
+**Verified headlessly (37 tests, no GPU):** the model logic, the commit policy,
 **recalc propagation showing up in the grid** (both variants), the keymap driving
 the cursor, type-to-edit seeding, the window growing to cover new far cells, and
 variant B's full modal flow (F2/type begins, Enter/Tab commit + move, Esc
