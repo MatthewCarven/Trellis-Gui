@@ -44,7 +44,9 @@ class HybridGrid:
         self._named = None
         self._ready_theme = None
         self._edit_theme = None
-        self._highlighted: str | None = None
+        self._highlighted: list[str] = []
+        self._selecting = False
+        self._sel_theme = None
         self._built_dims: tuple[int, int] | None = None
 
     def cell_tag(self, r: int, c: int) -> str:
@@ -59,6 +61,9 @@ class HybridGrid:
         with dpg.theme() as self._edit_theme:
             with dpg.theme_component(dpg.mvInputText):
                 dpg.add_theme_color(dpg.mvThemeCol_FrameBg, (40, 120, 70))
+        with dpg.theme() as self._sel_theme:
+            with dpg.theme_component(dpg.mvInputText):
+                dpg.add_theme_color(dpg.mvThemeCol_FrameBg, (38, 60, 96))
 
         # The formula / status bar: address | cursor cell source | mode | save state.
         with dpg.group(horizontal=True, parent=parent):
@@ -81,6 +86,9 @@ class HybridGrid:
 
         with dpg.handler_registry():
             dpg.add_key_press_handler(callback=self._on_key)
+            dpg.add_mouse_down_handler(button=dpg.mvMouseButton_Left, callback=self._on_mouse_down)
+            dpg.add_mouse_drag_handler(button=dpg.mvMouseButton_Left, callback=self._on_mouse_drag)
+            dpg.add_mouse_release_handler(button=dpg.mvMouseButton_Left, callback=self._on_mouse_release)
 
         self.refresh()
 
@@ -131,13 +139,27 @@ class HybridGrid:
         self._update_bar()
 
     def _paint_cursor(self) -> None:
-        if self._highlighted and dpg.does_item_exist(self._highlighted):
-            dpg.bind_item_theme(self._highlighted, 0)
+        # Clear every previously highlighted cell, then repaint the selection
+        # rectangle (dim) with the cursor cell on top (bright) — so both
+        # keyboard (Shift+arrow) and mouse drag selections show in the grid.
+        for t in self._highlighted:
+            if dpg.does_item_exist(t):
+                dpg.bind_item_theme(t, 0)
+        self._highlighted = []
+        sel = self.model.selection
+        if sel is not None and self._sel_theme is not None:
+            (t0, l0), (b0, r0) = sel
+            for r in range(t0, b0 + 1):
+                for c in range(l0, r0 + 1):
+                    tag = self.cell_tag(r, c)
+                    if dpg.does_item_exist(tag):
+                        dpg.bind_item_theme(tag, self._sel_theme)
+                        self._highlighted.append(tag)
         tag = self.cell_tag(*self.model.cursor)
         theme = self._edit_theme if self.editing else self._ready_theme
         if dpg.does_item_exist(tag) and theme is not None:
             dpg.bind_item_theme(tag, theme)
-            self._highlighted = tag
+            self._highlighted.append(tag)
 
     def _update_bar(self) -> None:
         cr, cc = self.model.cursor
@@ -239,7 +261,54 @@ class HybridGrid:
             return
         self._update_save_state()
 
+    # ------------------------------------------------------ mouse select
+    def _cell_under_mouse(self):
+        """The (row, col) of the visible cell under the pointer, or None.
+        DPG has no cell-hit-test for a table, so scan the window's cells."""
+        w = self.model.window
+        for r in w.rows:
+            for c in w.cols:
+                tag = self.cell_tag(r, c)
+                if dpg.does_item_exist(tag) and dpg.is_item_hovered(tag):
+                    return (r, c)
+        return None
+
+    def _begin_mouse_select(self, cell) -> None:
+        self.model.cursor = cell
+        self.model.anchor = cell
+        self.model.selection = None
+        self._selecting = True
+        self.refresh()
+
+    def _drag_select_to(self, cell) -> None:
+        if not self._selecting or cell == self.model.cursor:
+            return
+        self.model.cursor = cell
+        self.model.selection = self.model._norm(self.model.anchor, cell)
+        self.refresh()
+
+    def _end_mouse_select(self) -> None:
+        self._selecting = False
+
+    def _on_mouse_down(self, sender, app_data) -> None:  # pragma: no cover (needs mouse)
+        if self.editing or self._selecting:
+            return
+        cell = self._cell_under_mouse()
+        if cell is not None:
+            self._begin_mouse_select(cell)
+
+    def _on_mouse_drag(self, sender, app_data) -> None:  # pragma: no cover (needs mouse)
+        if self.editing or not self._selecting:
+            return
+        cell = self._cell_under_mouse()
+        if cell is not None:
+            self._drag_select_to(cell)
+
+    def _on_mouse_release(self, sender, app_data) -> None:  # pragma: no cover (needs mouse)
+        self._end_mouse_select()
+
     # -------------------------------------------------- per-cell handlers
+
 
     def _on_cell_focus(self, sender, app_data, user_data) -> None:
         if not self.editing:

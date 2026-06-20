@@ -135,3 +135,29 @@ def test_paste_repaints_grid(ctx):
     g.refresh()
     assert dpg.get_value(g.cell_tag(1, 1)) == "5"   # paste shows up in the grid
     assert sh["B2"].value == 5
+
+
+def test_selection_highlights_range(ctx):
+    g, m, sh = _grid([])
+    m.selection = ((0, 0), (1, 1))
+    m.cursor = (1, 1)
+    g.refresh()
+    for r, c in [(0, 0), (0, 1), (1, 0), (1, 1)]:
+        assert g.cell_tag(r, c) in g._highlighted   # whole rect highlighted
+
+
+def test_mouse_drag_builds_selection(ctx):
+    g, m, sh = _grid([])
+    g._begin_mouse_select((0, 0))                    # press
+    assert g._selecting is True and m.selection is None and m.cursor == (0, 0)
+    g._drag_select_to((1, 2))                        # drag to C2
+    assert m.selection == ((0, 0), (1, 2)) and m.cursor == (1, 2)
+    g._end_mouse_select()                            # release
+    assert g._selecting is False
+
+
+def test_begin_select_clears_prior_selection(ctx):
+    g, m, sh = _grid([("A1", 1), ("B2", 2)])
+    m.selection = ((0, 0), (1, 1)); m.anchor = (0, 0); m.cursor = (1, 1)
+    g._begin_mouse_select((2, 2))                    # a fresh click drops the old selection
+    assert m.selection is None and m.cursor == (2, 2) and m.anchor == (2, 2)
