@@ -124,3 +124,14 @@ def test_dirty_marker_in_status(ctx):
     dpg.set_value(g.cell_tag(0, 0), "2")
     g._on_key(None, dpg.mvKey_Return)
     assert dpg.get_value(g.SAVE) == "(unsaved) *"
+
+
+def test_paste_repaints_grid(ctx):
+    g, m, sh = _grid([("A1", 5)])
+    m.cursor = (0, 0)
+    m.apply_action(km.Operate("copy"))       # (Ctrl+C; modifier polling is headless)
+    m.cursor = (1, 1)
+    m.apply_action(km.Operate("paste"))
+    g.refresh()
+    assert dpg.get_value(g.cell_tag(1, 1)) == "5"   # paste shows up in the grid
+    assert sh["B2"].value == 5

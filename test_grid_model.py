@@ -201,3 +201,71 @@ def test_save_without_path_raises():
     m, _ = model()
     with pytest.raises(ValueError):
         m.save()
+
+
+# ------------------------------------------------ copy / cut / paste (Part 6)
+def test_copy_paste_single_value():
+    m, sh = model()
+    m.commit(0, 0, "5")                      # A1 = 5
+    m.cursor = (0, 0)
+    feed(m, "ctrl+c")                        # ExcelKeymap -> Operate("copy")
+    m.cursor = (1, 1)                        # move to B2
+    feed(m, "ctrl+v")                        # Operate("paste")
+    assert sh["B2"].value == 5
+
+
+def test_paste_shifts_formula():
+    m, sh = model()
+    m.commit(0, 0, "2")                      # A1
+    m.commit(1, 0, "3")                      # A2
+    m.commit(2, 0, "=A1+A2")                 # A3 = 5
+    m.commit(0, 1, "10")                     # B1
+    m.commit(1, 1, "20")                     # B2
+    m.cursor = (2, 0)
+    feed(m, "ctrl+c")                        # copy A3
+    m.cursor = (2, 1)
+    feed(m, "ctrl+v")                        # paste into B3 -> refs shift one col
+    assert sh["B3"].formula == "=B1+B2"
+    assert sh["B3"].value == 30
+
+
+def test_cut_moves_and_clears_source():
+    m, sh = model()
+    m.commit(0, 0, "99")                     # A1
+    m.cursor = (0, 0)
+    feed(m, "ctrl+x")                        # cut A1
+    m.cursor = (2, 2)
+    feed(m, "ctrl+v")                        # paste into C3
+    assert sh["C3"].value == 99
+    assert sh.get((0, 0)).is_empty()         # source cleared by the move
+
+
+def test_cut_demotes_to_copy_after_paste():
+    m, sh = model()
+    m.commit(0, 0, "7")
+    m.cursor = (0, 0)
+    feed(m, "ctrl+x")
+    m.cursor = (1, 0)
+    feed(m, "ctrl+v")                        # move 7 to A2; clipboard demotes to copy
+    m.cursor = (2, 0)
+    feed(m, "ctrl+v")                        # re-paste re-stamps a copy (no clear)
+    assert sh["A2"].value == 7 and sh["A3"].value == 7
+
+
+def test_copy_paste_block_range():
+    m, sh = model()
+    m.commit(0, 0, "1")
+    m.commit(0, 1, "2")                      # A1, B1
+    m.selection = ((0, 0), (0, 1)); m.anchor = (0, 0); m.cursor = (0, 1)
+    feed(m, "ctrl+c")                        # copy A1:B1
+    m.selection = None; m.cursor = (2, 0); m.anchor = (2, 0)
+    feed(m, "ctrl+v")                        # paste block at A3
+    assert sh["A3"].value == 1 and sh["B3"].value == 2
+
+
+def test_paste_with_empty_clipboard_is_noop():
+    m, sh = model()
+    m.commit(0, 0, "1")
+    m.cursor = (1, 0)
+    feed(m, "ctrl+v")                        # nothing copied yet
+    assert sh.get((1, 0)).is_empty()

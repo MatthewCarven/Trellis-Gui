@@ -16,7 +16,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 import trellis_keymap as km
-from trellis import FormulaError, Sheet, infer_value, to_a1
+from trellis import Cell, FormulaError, Sheet, infer_value, shift_formula, to_a1
 from trellis_undo import attach as _attach_undo
 
 # A windowed view never draws the whole (unbounded) sheet — only enough cells to
@@ -55,6 +55,18 @@ class Window:
         return self.right - self.left + 1
 
 
+@dataclass(frozen=True)
+class Clipboard:
+    """A snapshot of a copied/cut rectangle: ``cells`` is rows×cols of
+    ``(formula, value)`` payloads, ``anchor`` is the source top-left (formula
+    shifting keys off it), and ``mode`` is ``"copy"`` or ``"cut"``. Mirrors the
+    TUI's clipboard, minus the terminal-only OS text bridge."""
+
+    cells: tuple
+    mode: str
+    anchor: tuple[int, int]
+
+
 class GridModel:
     """Cursor + selection + windowing over one engine ``Sheet``.
 
@@ -83,6 +95,8 @@ class GridModel:
         # True once anything has been edited since the last save/load — drives
         # the GUI's unsaved-changes marker.
         self.dirty = False
+        # The internal cells clipboard (None until the first copy/cut).
+        self.clipboard: Clipboard | None = None
         # Undo/redo: attach a trellis_undo.UndoLog to the sheet exactly as the
         # TUI does (also reachable at ``sheet.meta["undo"]``). Attached AFTER any
         # CSV load, so opening a file is not itself an undoable step.
@@ -170,7 +184,6 @@ class GridModel:
         self.dirty = False
         return target
 
-
     # -------------------------------------------------------- keymap execution
     def key_context(self) -> km.KeyContext:
         """The read-only snapshot the keymap reads — built exactly like the
@@ -210,6 +223,12 @@ class GridModel:
         elif isinstance(action, km.Operate):
             if action.op == "clear":
                 self._clear(action.rect)
+            elif action.op == "copy":
+                self._copy(action.rect, "copy")
+            elif action.op == "cut":
+                self._copy(action.rect, "cut")
+            elif action.op == "paste":
+                self._paste(action.rect)
         elif isinstance(action, km.Undo):
             if self.undo_log.undo():
                 self.dirty = True
@@ -253,7 +272,80 @@ class GridModel:
         self.dirty = True
         self._recompute_window()
 
+    # --------------------------------------------------------- clipboard
+    def _op_rect(self, rect: km.Rect | None) -> km.Rect:
+        """Resolve an Operate/paste rect at execution time: explicit rect,
+        else the live selection, else the cursor cell — the TUI's rule."""
+        if rect is not None:
+            return rect
+        if self.selection is not None:
+            return self.selection
+        return (self.cursor, self.cursor)
+
+    def _copy(self, rect: km.Rect | None, mode: str) -> None:
+        """Snapshot a rectangle into the clipboard (no sheet write, so not
+        dirty). A cut only relocates cells when it is later pasted."""
+        (r0, c0), (r1, c1) = self._op_rect(rect)
+        rows = []
+        for r in range(r0, r1 + 1):
+            payload = []
+            for c in range(c0, c1 + 1):
+                cell = self.sheet.get((r, c))
+                payload.append((cell.formula, cell.value))
+            rows.append(tuple(payload))
+        self.clipboard = Clipboard(cells=tuple(rows), mode=mode, anchor=(r0, c0))
+
+    def _paste(self, rect: km.Rect | None) -> None:
+        """Stamp the clipboard at the target's top-left as ONE undo step.
+        Copy mode shifts formulas by the paste offset (a 1×1 payload fills the
+        whole target rect, Excel-style); cut mode pastes verbatim, clears the
+        not-overwritten source cells, then demotes to copy (re-paste re-stamps)."""
+        clip = self.clipboard
+        if clip is None:
+            return
+        (t0r, t0c), (t1r, t1c) = self._op_rect(rect)
+        src = clip.cells
+        sr, sc = clip.anchor
+        moving = clip.mode == "cut"
+        with self.sheet.batch():
+            if not moving and len(src) == 1 and len(src[0]) == 1:
+                formula, value = src[0][0]
+                for r in range(t0r, t1r + 1):
+                    for c in range(t0c, t1c + 1):
+                        self._paste_cell(r, c, formula, value, r - sr, c - sc)
+            else:
+                dr, dc = (0, 0) if moving else (t0r - sr, t0c - sc)
+                written = set()
+                for r_off, payload in enumerate(src):
+                    for c_off, (formula, value) in enumerate(payload):
+                        self._paste_cell(t0r + r_off, t0c + c_off, formula, value, dr, dc)
+                        written.add((t0r + r_off, t0c + c_off))
+                if moving:
+                    for r in range(sr, sr + len(src)):
+                        for c in range(sc, sc + len(src[0])):
+                            if (r, c) not in written:
+                                self.sheet.delete((r, c))
+        if moving:
+            self.clipboard = Clipboard(cells=src, mode="copy", anchor=clip.anchor)
+        self.dirty = True
+        self._recompute_window()
+
+    def _paste_cell(self, r: int, c: int, formula, value, dr: int, dc: int) -> None:
+        """Write one transferred cell. Formulas shift (off-edge refs become
+        ``#REF!``); a literal ``"="``-string value stores verbatim via a
+        prebuilt ``Cell``; empty source cells clear the target."""
+        addr = (r, c)
+        if formula is not None:
+            self.sheet.set(addr, shift_formula(formula, dr, dc))
+        elif value is None:
+            self.sheet.delete(addr)
+        elif isinstance(value, str) and value.startswith("="):
+            self.sheet.set(addr, Cell(value=value))
+        else:
+            self.sheet.set(addr, value)
+
     @staticmethod
     def _norm(a: tuple[int, int], b: tuple[int, int]) -> km.Rect:
+
         (ar, ac), (br, bc) = a, b
         return ((min(ar, br), min(ac, bc)), (max(ar, br), max(ac, bc)))
