@@ -161,3 +161,40 @@ def test_begin_select_clears_prior_selection(ctx):
     m.selection = ((0, 0), (1, 1)); m.anchor = (0, 0); m.cursor = (1, 1)
     g._begin_mouse_select((2, 2))                    # a fresh click drops the old selection
     assert m.selection is None and m.cursor == (2, 2) and m.anchor == (2, 2)
+
+
+# ----------------------------------------------------------- open / new
+def test_new_resets_to_blank(ctx):
+    g, m, sh = _grid([("A1", 10), ("A2", 5)])
+    g._new()                                         # model not dirty -> proceeds
+    assert g.model is not m
+    assert g.model.sheet.used_range() is None        # blank sheet
+    assert g.model.path is None
+    assert dpg.get_value(g.cell_tag(0, 0)) == ""      # grid cleared
+
+
+def test_open_path_loads_csv(ctx, tmp_path):
+    p = tmp_path / "in.csv"
+    p.write_text("x,y\n1,=A1+1\n")
+    g, m, sh = _grid([])
+    g._open_path(str(p))
+    assert g.model.path == str(p)
+    assert dpg.get_value(g.cell_tag(0, 0)) == "x"
+    assert g.model.sheet.get((1, 1)).formula == "=A1+1"   # formulas live on load
+
+
+def test_dirty_guard_blocks_then_discards(ctx):
+    g, m, sh = _grid([("A1", 10)])
+    m.dirty = True
+    g._new()                                         # dirty -> modal, no swap yet
+    assert g.model is m and g._pending is not None
+    g._confirm_discard()                             # discard -> the deferred new runs
+    assert g.model is not m and g.model.sheet.used_range() is None
+
+
+def test_dirty_guard_cancel_keeps_model(ctx):
+    g, m, sh = _grid([("A1", 10)])
+    m.dirty = True
+    g._new()
+    g._confirm_cancel()
+    assert g.model is m and g._pending is None

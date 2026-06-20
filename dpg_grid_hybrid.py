@@ -19,7 +19,7 @@ from pathlib import Path
 import dearpygui.dearpygui as dpg
 
 import trellis_keymap as km
-from trellis import to_a1
+from trellis import Workbook, read_csv, to_a1
 
 from dpg_grid import _named_keys, col_label, keypress_from_code, load_model
 from grid_model import GridModel
@@ -37,6 +37,8 @@ class HybridGrid:
     MODE = "hy_mode"
     SAVE = "hy_save"
     SAVE_DIALOG = "hy_save_dialog"
+    OPEN_DIALOG = "hy_open_dialog"
+    CONFIRM = "hy_confirm"
 
     def __init__(self, model: GridModel):
         self.model = model
@@ -47,6 +49,7 @@ class HybridGrid:
         self._highlighted: list[str] = []
         self._selecting = False
         self._sel_theme = None
+        self._pending = None        # a deferred action awaiting the unsaved-changes modal
         self._built_dims: tuple[int, int] | None = None
 
     def cell_tag(self, r: int, c: int) -> str:
@@ -65,8 +68,17 @@ class HybridGrid:
             with dpg.theme_component(dpg.mvInputText):
                 dpg.add_theme_color(dpg.mvThemeCol_FrameBg, (38, 60, 96))
 
+        # File menu — makes the Ctrl+N/O/S gestures discoverable.
+        with dpg.menu_bar(parent=parent):
+            with dpg.menu(label="File"):
+                dpg.add_menu_item(label="New", shortcut="Ctrl+N", callback=lambda: self._new())
+                dpg.add_menu_item(label="Open...", shortcut="Ctrl+O", callback=lambda: self._open())
+                dpg.add_menu_item(label="Save", shortcut="Ctrl+S", callback=lambda: self._save())
+                dpg.add_menu_item(label="Save As...", callback=lambda: dpg.show_item(self.SAVE_DIALOG))
+
         # The formula / status bar: address | cursor cell source | mode | save state.
         with dpg.group(horizontal=True, parent=parent):
+
             dpg.add_text("A1", tag=self.ADDR)
             dpg.add_input_text(tag=self.BAR, width=-260, readonly=True, hint="(formula / value)")
             dpg.add_text("[READY]", tag=self.MODE)
@@ -83,6 +95,24 @@ class HybridGrid:
         ):
             dpg.add_file_extension(".csv")
             dpg.add_file_extension(".*")
+
+        # Open dialog + an unsaved-changes confirm modal.
+        with dpg.file_dialog(
+            tag=self.OPEN_DIALOG, directory_selector=False, show=False,
+            width=520, height=400, callback=self._on_open_file,
+        ):
+            dpg.add_file_extension(".csv")
+            dpg.add_file_extension(".*")
+        with dpg.window(
+            label="Unsaved changes", tag=self.CONFIRM, modal=True, show=False,
+            no_resize=True, width=300, height=110,
+        ):
+            dpg.add_text("Discard unsaved changes?")
+            dpg.add_spacer(height=6)
+            with dpg.group(horizontal=True):
+                dpg.add_button(label="Discard", width=90, callback=self._confirm_discard)
+                dpg.add_button(label="Cancel", width=90, callback=self._confirm_cancel)
+
 
         with dpg.handler_registry():
             dpg.add_key_press_handler(callback=self._on_key)
@@ -194,6 +224,12 @@ class HybridGrid:
         if kp.ctrl and kp.key == "s":
             self._save()
             return
+        if kp.ctrl and kp.key == "n":
+            self._new()
+            return
+        if kp.ctrl and kp.key == "o":
+            self._open()
+            return
         action = km.ExcelKeymap().handle(kp, self.model.key_context())
         intent = self.model.apply_action(action)
         if intent and intent[0] == "edit":
@@ -261,8 +297,59 @@ class HybridGrid:
             return
         self._update_save_state()
 
+    # --------------------------------------------------------- open / new
+    def _new(self) -> None:
+        self._guard(self._do_new)
+
+    def _do_new(self) -> None:
+        wb = Workbook()
+        wb.add_sheet("Sheet1")
+        sheet = wb[next(iter(wb))]
+        self._load_model(GridModel(sheet))
+
+    def _open(self) -> None:
+        self._guard(lambda: dpg.show_item(self.OPEN_DIALOG))
+
+    def _on_open_file(self, sender, app_data) -> None:  # pragma: no cover (UI dialog)
+        path = app_data.get("file_path_name") if isinstance(app_data, dict) else None
+        if path:
+            self._open_path(path)
+
+    def _open_path(self, path: str) -> None:
+        wb = read_csv(path, formulas=True)
+        sheet = wb[next(iter(wb))]
+        self._load_model(GridModel(sheet, path=path))
+
+    def _load_model(self, model: GridModel) -> None:
+        """Swap in a freshly loaded model and rebuild the grid around it."""
+        self.model = model
+        self.editing = False
+        self._selecting = False
+        self._highlighted = []
+        self._built_dims = None      # force a full table rebuild
+        self.refresh()
+
+    def _guard(self, proceed) -> None:
+        """Run ``proceed`` now, or stash it behind the unsaved-changes modal."""
+        if self.model.dirty:
+            self._pending = proceed
+            dpg.show_item(self.CONFIRM)
+        else:
+            proceed()
+
+    def _confirm_discard(self) -> None:
+        dpg.hide_item(self.CONFIRM)
+        pending, self._pending = self._pending, None
+        if pending is not None:
+            pending()
+
+    def _confirm_cancel(self) -> None:
+        dpg.hide_item(self.CONFIRM)
+        self._pending = None
+
     # ------------------------------------------------------ mouse select
     def _cell_under_mouse(self):
+
         """The (row, col) of the visible cell under the pointer, or None.
         DPG has no cell-hit-test for a table, so scan the window's cells."""
         w = self.model.window
@@ -344,7 +431,7 @@ def main(argv: list[str] | None = None) -> None:  # pragma: no cover
     model = load_model(argv)
     dpg.create_context()
     grid = HybridGrid(model)
-    with dpg.window(tag="primary"):
+    with dpg.window(tag="primary", menubar=True):
         grid.build("primary")
     grid.run()
 
