@@ -129,14 +129,15 @@ the construction code and callbacks are exercised for real.
 - **One redraw strategy.** Here the table rebuilds only when the window's size
   changes; values repaint via `set_value`. Fine at CSV scale; revisit if a
   window ever gets large.
-- **Undo/redo and save — now built** on the hybrid candidate: `Ctrl+Z`/`Ctrl+Y`
-  drive a `trellis-undo` log attached exactly as the TUI does, and `Ctrl+S`
-  writes the CSV back (`sheet.to_csv(formulas=True)`), with a Save As dialog for
-  the no-path case. Mouse select and multi-sheet tabs are still "more of the
-  same" and intentionally absent.
+- **Now built on the hybrid candidate** — the basic-spreadsheet essentials beyond
+  edit/recalc: undo/redo (`Ctrl+Z`/`Ctrl+Y`, a `trellis-undo` log attached the way
+  the TUI does it), save (`Ctrl+S` → `sheet.to_csv(formulas=True)`, with a Save As
+  dialog), copy/cut/paste (`Ctrl+C`/`X`/`V`, formulas shift on paste), mouse
+  drag-select with a visible selection rectangle, Open/New (`Ctrl+O`/`Ctrl+N`) plus
+  a File menu, and multi-sheet tabs (each tab its own sheet + undo history;
+  `Ctrl+W` closes, with an unsaved-changes guard).
 
 ## Status
 
-Spike / seed for the new GUI project. When that project gets its own repo,
-`git mv spikes/dpg-grid` out — it depends only on the published `trellis` +
-`trellis-keymap`, nothing else in this monorepo.
+The standalone GUI project, moved out of the Trellis monorepo's `spikes/dpg-grid`.
+It depends only on the published `trellis` + `trellis-keymap` + `trellis-undo`.

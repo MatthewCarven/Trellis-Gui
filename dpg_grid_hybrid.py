@@ -39,9 +39,13 @@ class HybridGrid:
     SAVE_DIALOG = "hy_save_dialog"
     OPEN_DIALOG = "hy_open_dialog"
     CONFIRM = "hy_confirm"
+    TABBAR = "hy_tabbar"
 
     def __init__(self, model: GridModel):
         self.model = model
+        self.models = [model]   # one GridModel per sheet tab; self.model is the active one
+        self.active = 0
+        self._tab_index: dict = {}
         self.editing = False
         self._named = None
         self._ready_theme = None
@@ -75,6 +79,8 @@ class HybridGrid:
                 dpg.add_menu_item(label="Open...", shortcut="Ctrl+O", callback=lambda: self._open())
                 dpg.add_menu_item(label="Save", shortcut="Ctrl+S", callback=lambda: self._save())
                 dpg.add_menu_item(label="Save As...", callback=lambda: dpg.show_item(self.SAVE_DIALOG))
+                dpg.add_separator()
+                dpg.add_menu_item(label="Close Tab", shortcut="Ctrl+W", callback=lambda: self._close_tab())
 
         # The formula / status bar: address | cursor cell source | mode | save state.
         with dpg.group(horizontal=True, parent=parent):
@@ -84,8 +90,10 @@ class HybridGrid:
             dpg.add_text("[READY]", tag=self.MODE)
             dpg.add_text("", tag=self.SAVE)
         dpg.add_separator(parent=parent)
+        dpg.add_tab_bar(tag=self.TABBAR, parent=parent, callback=self._on_tab_changed)
         dpg.add_group(tag=self.HOLDER, parent=parent)
         self._rebuild_table()
+        self._rebuild_tabs()
 
         # A hidden Save As dialog, shown only when the sheet has no path yet.
         with dpg.file_dialog(
@@ -230,6 +238,9 @@ class HybridGrid:
         if kp.ctrl and kp.key == "o":
             self._open()
             return
+        if kp.ctrl and kp.key == "w":
+            self._close_tab()
+            return
         action = km.ExcelKeymap().handle(kp, self.model.key_context())
         intent = self.model.apply_action(action)
         if intent and intent[0] == "edit":
@@ -297,18 +308,20 @@ class HybridGrid:
             return
         self._update_save_state()
 
-    # --------------------------------------------------------- open / new
+    # ----------------------------------------------------- tabs / open / new
     def _new(self) -> None:
-        self._guard(self._do_new)
+        """New blank sheet in its own tab (non-destructive — existing tabs
+        stay, so there is nothing to discard and no prompt)."""
+        self._do_new()
 
     def _do_new(self) -> None:
         wb = Workbook()
         wb.add_sheet("Sheet1")
         sheet = wb[next(iter(wb))]
-        self._load_model(GridModel(sheet))
+        self._add_tab(GridModel(sheet))
 
     def _open(self) -> None:
-        self._guard(lambda: dpg.show_item(self.OPEN_DIALOG))
+        dpg.show_item(self.OPEN_DIALOG)
 
     def _on_open_file(self, sender, app_data) -> None:  # pragma: no cover (UI dialog)
         path = app_data.get("file_path_name") if isinstance(app_data, dict) else None
@@ -318,19 +331,69 @@ class HybridGrid:
     def _open_path(self, path: str) -> None:
         wb = read_csv(path, formulas=True)
         sheet = wb[next(iter(wb))]
-        self._load_model(GridModel(sheet, path=path))
+        self._add_tab(GridModel(sheet, path=path))
 
-    def _load_model(self, model: GridModel) -> None:
-        """Swap in a freshly loaded model and rebuild the grid around it."""
-        self.model = model
+    def _add_tab(self, model: GridModel) -> None:
+        """Append a sheet tab and make it active."""
+        self.models.append(model)
+        self.active = len(self.models) - 1
+        self._rebuild_tabs()
+        self._activate()
+
+    def _switch_to(self, i: int) -> None:
+        if i != self.active and 0 <= i < len(self.models):
+            self.active = i
+            self._activate()
+
+    def _activate(self) -> None:
+        """Point the view at ``self.models[self.active]`` and rebuild the grid."""
+        self.model = self.models[self.active]
         self.editing = False
         self._selecting = False
         self._highlighted = []
-        self._built_dims = None      # force a full table rebuild
+        self._built_dims = None      # force a full rebuild for the new sheet
         self.refresh()
 
+    def _on_tab_changed(self, sender, app_data) -> None:
+        i = self._tab_index.get(app_data)
+        if i is not None:
+            self._switch_to(i)
+
+    def _tab_label(self, i: int) -> str:
+        m = self.models[i]
+        return Path(m.path).name if m.path else f"Sheet {i + 1}"
+
+    def _rebuild_tabs(self) -> None:
+        if dpg.does_item_exist(self.TABBAR):
+            dpg.delete_item(self.TABBAR, children_only=True)
+        self._tab_index = {}
+        active_tag = None
+        for i in range(len(self.models)):
+            t = dpg.add_tab(label=self._tab_label(i), parent=self.TABBAR)
+            self._tab_index[t] = i
+            if i == self.active:
+                active_tag = t
+        dpg.add_tab_button(label="+", parent=self.TABBAR, trailing=True,
+                           callback=lambda: self._new())
+        if active_tag is not None:
+            dpg.set_value(self.TABBAR, active_tag)
+
+    def _close_tab(self) -> None:
+        """Close the active tab (never the last one); a dirty tab prompts."""
+        if len(self.models) <= 1:
+            return
+        self._guard(self._do_close)
+
+    def _do_close(self) -> None:
+        del self.models[self.active]
+        if self.active >= len(self.models):
+            self.active = len(self.models) - 1
+        self._rebuild_tabs()
+        self._activate()
+
     def _guard(self, proceed) -> None:
-        """Run ``proceed`` now, or stash it behind the unsaved-changes modal."""
+        """Run ``proceed`` now, or stash it behind the unsaved-changes modal
+        (used when closing a tab that has unsaved edits)."""
         if self.model.dirty:
             self._pending = proceed
             dpg.show_item(self.CONFIRM)

@@ -163,38 +163,57 @@ def test_begin_select_clears_prior_selection(ctx):
     assert m.selection is None and m.cursor == (2, 2) and m.anchor == (2, 2)
 
 
-# ----------------------------------------------------------- open / new
-def test_new_resets_to_blank(ctx):
+# ----------------------------------------------------- tabs / open / new
+def test_new_adds_blank_tab(ctx):
     g, m, sh = _grid([("A1", 10), ("A2", 5)])
-    g._new()                                         # model not dirty -> proceeds
+    assert len(g.models) == 1
+    g._new()
+    assert len(g.models) == 2 and g.active == 1
     assert g.model is not m
-    assert g.model.sheet.used_range() is None        # blank sheet
-    assert g.model.path is None
-    assert dpg.get_value(g.cell_tag(0, 0)) == ""      # grid cleared
+    assert g.model.sheet.used_range() is None         # the new tab is blank
+    assert dpg.get_value(g.cell_tag(0, 0)) == ""
 
 
-def test_open_path_loads_csv(ctx, tmp_path):
+def test_switch_tab_changes_active_model(ctx):
+    g, m, sh = _grid([("A1", 10)])
+    g._new()                                           # tab 2 (blank), now active
+    assert g.active == 1
+    g._switch_to(0)                                    # back to tab 1
+    assert g.active == 0 and g.model is m
+    assert dpg.get_value(g.cell_tag(0, 0)) == "10"     # tab 1's data is shown again
+
+
+def test_open_path_opens_in_new_tab(ctx, tmp_path):
     p = tmp_path / "in.csv"
     p.write_text("x,y\n1,=A1+1\n")
-    g, m, sh = _grid([])
+    g, m, sh = _grid([("A1", 10)])
     g._open_path(str(p))
+    assert len(g.models) == 2 and g.active == 1
     assert g.model.path == str(p)
     assert dpg.get_value(g.cell_tag(0, 0)) == "x"
     assert g.model.sheet.get((1, 1)).formula == "=A1+1"   # formulas live on load
 
 
-def test_dirty_guard_blocks_then_discards(ctx):
+def test_close_tab_keeps_last(ctx):
     g, m, sh = _grid([("A1", 10)])
-    m.dirty = True
-    g._new()                                         # dirty -> modal, no swap yet
-    assert g.model is m and g._pending is not None
-    g._confirm_discard()                             # discard -> the deferred new runs
-    assert g.model is not m and g.model.sheet.used_range() is None
+    g._close_tab()                                     # only one tab -> no-op
+    assert len(g.models) == 1
 
 
-def test_dirty_guard_cancel_keeps_model(ctx):
+def test_close_tab_guard_blocks_then_discards(ctx):
     g, m, sh = _grid([("A1", 10)])
-    m.dirty = True
-    g._new()
+    g._do_new()                                        # 2 tabs; tab 2 active
+    g.model.commit(0, 0, "z")                          # dirty the active tab
+    g._close_tab()                                     # dirty -> modal, no close yet
+    assert len(g.models) == 2 and g._pending is not None
+    g._confirm_discard()                               # discard -> close
+    assert len(g.models) == 1
+
+
+def test_close_tab_guard_cancel_keeps_tab(ctx):
+    g, m, sh = _grid([("A1", 10)])
+    g._do_new()
+    g.model.commit(0, 0, "z")
+    g._close_tab()
     g._confirm_cancel()
-    assert g.model is m and g._pending is None
+    assert len(g.models) == 2 and g._pending is None
