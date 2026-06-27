@@ -82,8 +82,15 @@ class GridModel:
         min_rows: int = MIN_ROWS,
         min_cols: int = MIN_COLS,
         path: str | None = None,
+        workbook=None,
     ):
         self.sheet = sheet
+        # The Workbook this sheet belongs to, if a frontend chose to track it.
+        # Core never needs it (reads/writes go through ``sheet``), but a
+        # multi-sheet frontend keeps every tab's sheet in ONE workbook so the
+        # engine's cross-sheet refs (``=Sheet2!A1``) and shared recalc just
+        # work. ``None`` for a standalone single-sheet model.
+        self.workbook = workbook
         self.cursor: tuple[int, int] = (0, 0)
         self.anchor: tuple[int, int] = (0, 0)  # fixed corner of a selection
         self.selection: km.Rect | None = None
@@ -325,6 +332,19 @@ class GridModel:
                 payload.append((cell.formula, cell.value))
             rows.append(tuple(payload))
         self.clipboard = Clipboard(cells=tuple(rows), mode=mode, anchor=(r0, c0))
+
+    def clipboard_summary(self) -> str | None:
+        """A short human description of what's on the clipboard, for a
+        frontend status line — e.g. ``"Copied 2×3"`` / ``"Cut 1×1"``. ``None``
+        when nothing has been copied/cut yet. Frontend-neutral and headless-
+        testable; the GUI just displays it."""
+        clip = self.clipboard
+        if clip is None:
+            return None
+        rows = len(clip.cells)
+        cols = len(clip.cells[0]) if rows else 0
+        verb = "Cut" if clip.mode == "cut" else "Copied"
+        return f"{verb} {rows}×{cols}"
 
     def _paste(self, rect: km.Rect | None) -> None:
         """Stamp the clipboard at the target's top-left as ONE undo step.

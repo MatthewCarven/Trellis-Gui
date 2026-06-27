@@ -373,3 +373,16 @@ def test_enter_visual_anchors_selection_at_cursor():
     assert m.mode == "visual"
     assert m.anchor == (2, 1)
     assert m.selection == ((2, 1), (2, 1))
+
+
+def test_clipboard_summary_reports_size_and_mode():
+    m, sh = model()
+    assert m.clipboard_summary() is None         # nothing copied yet
+    sh["A1"] = 1
+    sh["B1"] = 2
+    m.selection = ((0, 0), (0, 1))               # a 1x2 block
+    m.cursor = (0, 1)
+    feed(m, "ctrl+c")
+    assert m.clipboard_summary() == "Copied 1\u00d72"
+    feed(m, "ctrl+x")
+    assert m.clipboard_summary() == "Cut 1\u00d72"

@@ -229,12 +229,16 @@ def load_model(argv: list[str]) -> GridModel:
     path: str | None = None
     if argv and Path(argv[0]).exists():
         path = argv[0]
-        wb = read_csv(path, formulas=True)  # CSV-as-spreadsheet: formulas live
+        # Name the sheet after the file so cross-sheet refs read naturally
+        # (``=demo!A1``) and the tab label is meaningful.
+        wb = read_csv(path, formulas=True, sheet_name=Path(path).stem or "Sheet1")
     else:
         wb = Workbook()
         wb.add_sheet("Sheet1")
     sheet = wb[next(iter(wb))]  # first sheet by name (Workbook iterates names)
-    return GridModel(sheet, path=path)
+    # Hand the workbook to the model so a multi-sheet frontend keeps every tab
+    # in this one book (cross-sheet refs + shared recalc).
+    return GridModel(sheet, path=path, workbook=wb)
 
 
 def main(argv: list[str] | None = None) -> None:  # pragma: no cover

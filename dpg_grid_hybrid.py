@@ -35,6 +35,7 @@ class HybridGrid:
     BAR = "hy_bar"
     ADDR = "hy_addr"
     MODE = "hy_mode"
+    MSG = "hy_msg"
     SAVE = "hy_save"
     SAVE_DIALOG = "hy_save_dialog"
     OPEN_DIALOG = "hy_open_dialog"
@@ -44,8 +45,15 @@ class HybridGrid:
     def __init__(self, model: GridModel):
         self.model = model
         self.models = [model]   # one GridModel per sheet tab; self.model is the active one
+        # The ONE workbook every tab's sheet lives in. Sharing it is what makes
+        # cross-sheet refs (``=Sheet2!A1``) and the engine's shared recalc work
+        # across tabs. Falls back to a fresh book if the model wasn't given one
+        # (so a bare ``HybridGrid(GridModel(sheet))`` still runs single-sheet).
+        self.wb = model.workbook if model.workbook is not None else Workbook()
         self.active = 0
         self._tab_index: dict = {}
+        self._tab_tags: dict[int, int | str] = {}   # tab index -> dpg tab tag
+        self._status_msg = ""                        # transient copy/cut/paste feedback
         self.editing = False
         self._named = None
         self._ready_theme = None
@@ -86,8 +94,9 @@ class HybridGrid:
         with dpg.group(horizontal=True, parent=parent):
 
             dpg.add_text("A1", tag=self.ADDR)
-            dpg.add_input_text(tag=self.BAR, width=-260, readonly=True, hint="(formula / value)")
+            dpg.add_input_text(tag=self.BAR, width=-380, readonly=True, hint="(formula / value)")
             dpg.add_text("[READY]", tag=self.MODE)
+            dpg.add_text("", tag=self.MSG)    # copy/cut/paste feedback
             dpg.add_text("", tag=self.SAVE)
         dpg.add_separator(parent=parent)
         dpg.add_tab_bar(tag=self.TABBAR, parent=parent, callback=self._on_tab_changed)
@@ -210,6 +219,28 @@ class HybridGrid:
     def _update_save_state(self) -> None:
         name = Path(self.model.path).name if self.model.path else "(unsaved)"
         dpg.set_value(self.SAVE, f"{name} *" if self.model.dirty else name)
+        self._refresh_tab_labels()
+
+    # ------------------------------------------------- clipboard feedback
+    def _set_msg(self, text: str) -> None:
+        """Set the transient status message (copy/cut/paste feedback)."""
+        self._status_msg = text
+        if dpg.does_item_exist(self.MSG):
+            dpg.set_value(self.MSG, text)
+
+    def _feedback_for_operate(self, op: str) -> None:
+        """Show what a clipboard Operate just did. Copy/cut report the
+        clipboard size; paste reports the stamped size; clear says so."""
+        if op in ("copy", "cut"):
+            self._set_msg(self.model.clipboard_summary() or "")
+        elif op == "paste":
+            clip = self.model.clipboard
+            if clip is not None:
+                rows = len(clip.cells)
+                cols = len(clip.cells[0]) if rows else 0
+                self._set_msg(f"Pasted {rows}×{cols}")
+        elif op == "clear":
+            self._set_msg("Cleared")
 
     # ---------------------------------------------------------- key handling
     def _on_key(self, sender, app_data) -> None:
@@ -244,8 +275,15 @@ class HybridGrid:
         action = km.ExcelKeymap().handle(kp, self.model.key_context())
         intent = self.model.apply_action(action)
         if intent and intent[0] == "edit":
+            self._set_msg("")
             self._begin_edit(seed=intent[3])
-        elif isinstance(action, (km.Move, km.MoveTo, km.Select, km.Operate, km.EnterMode, km.Undo, km.Redo)):
+        elif isinstance(action, km.Operate):
+            self._feedback_for_operate(action.op)
+            self.refresh()
+            if dpg.does_item_exist(self.cell_tag(*self.model.cursor)):
+                dpg.focus_item(self.cell_tag(*self.model.cursor))
+        elif isinstance(action, (km.Move, km.MoveTo, km.Select, km.EnterMode, km.Undo, km.Redo)):
+            self._set_msg("")   # any plain navigation clears stale clipboard feedback
             self.refresh()
             if dpg.does_item_exist(self.cell_tag(*self.model.cursor)):
                 dpg.focus_item(self.cell_tag(*self.model.cursor))
@@ -315,10 +353,28 @@ class HybridGrid:
         self._do_new()
 
     def _do_new(self) -> None:
-        wb = Workbook()
-        wb.add_sheet("Sheet1")
-        sheet = wb[next(iter(wb))]
-        self._add_tab(GridModel(sheet))
+        # Add the new sheet to the SHARED workbook (not a fresh one) so it can
+        # be referenced from, and reference, the other tabs.
+        name = self._new_sheet_name()
+        sheet = self.wb.add_sheet(name)
+        self._add_tab(GridModel(sheet, workbook=self.wb))
+
+    def _new_sheet_name(self) -> str:
+        """Lowest free ``Sheet<N>`` name in the shared workbook."""
+        i = 1
+        while f"Sheet{i}" in self.wb:
+            i += 1
+        return f"Sheet{i}"
+
+    def _unique_name(self, base: str) -> str:
+        """``base`` if free in the workbook, else ``base2``, ``base3``, … —
+        sheet names must be unique for cross-sheet refs to address them."""
+        if base and base not in self.wb:
+            return base
+        i = 2
+        while f"{base}{i}" in self.wb:
+            i += 1
+        return f"{base}{i}"
 
     def _open(self) -> None:
         dpg.show_item(self.OPEN_DIALOG)
@@ -329,9 +385,12 @@ class HybridGrid:
             self._open_path(path)
 
     def _open_path(self, path: str) -> None:
-        wb = read_csv(path, formulas=True)
-        sheet = wb[next(iter(wb))]
-        self._add_tab(GridModel(sheet, path=path))
+        # Load into the SHARED workbook under a unique, file-derived name so the
+        # opened sheet joins the same recalc graph as the other tabs.
+        name = self._unique_name(Path(path).stem or "Sheet")
+        read_csv(path, formulas=True, workbook=self.wb, sheet_name=name)
+        sheet = self.wb[name]
+        self._add_tab(GridModel(sheet, path=path, workbook=self.wb))
 
     def _add_tab(self, model: GridModel) -> None:
         """Append a sheet tab and make it active."""
@@ -360,23 +419,34 @@ class HybridGrid:
             self._switch_to(i)
 
     def _tab_label(self, i: int) -> str:
+        """The tab caption: the engine sheet name (what you type in a
+        cross-sheet ref) plus a ``*`` when that tab has unsaved edits."""
         m = self.models[i]
-        return Path(m.path).name if m.path else f"Sheet {i + 1}"
+        return f"{m.sheet.name} *" if m.dirty else m.sheet.name
 
     def _rebuild_tabs(self) -> None:
         if dpg.does_item_exist(self.TABBAR):
             dpg.delete_item(self.TABBAR, children_only=True)
         self._tab_index = {}
+        self._tab_tags = {}
         active_tag = None
         for i in range(len(self.models)):
             t = dpg.add_tab(label=self._tab_label(i), parent=self.TABBAR)
             self._tab_index[t] = i
+            self._tab_tags[i] = t
             if i == self.active:
                 active_tag = t
         dpg.add_tab_button(label="+", parent=self.TABBAR, trailing=True,
                            callback=lambda: self._new())
         if active_tag is not None:
             dpg.set_value(self.TABBAR, active_tag)
+
+    def _refresh_tab_labels(self) -> None:
+        """Update tab captions in place so the per-tab dirty marker tracks
+        edits live, without the cost of a full tab-bar rebuild."""
+        for i, tag in self._tab_tags.items():
+            if i < len(self.models) and dpg.does_item_exist(tag):
+                dpg.configure_item(tag, label=self._tab_label(i))
 
     def _close_tab(self) -> None:
         """Close the active tab (never the last one); a dirty tab prompts."""
@@ -385,6 +455,12 @@ class HybridGrid:
         self._guard(self._do_close)
 
     def _do_close(self) -> None:
+        # Drop the sheet from the shared workbook too, so a closed tab stops
+        # participating in cross-sheet refs and recalc (refs to it resolve to
+        # an error, exactly like deleting a sheet in Excel).
+        closing = self.models[self.active].sheet
+        if closing.name in self.wb:
+            self.wb.remove_sheet(closing.name)
         del self.models[self.active]
         if self.active >= len(self.models):
             self.active = len(self.models) - 1
