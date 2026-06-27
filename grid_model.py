@@ -88,6 +88,9 @@ class GridModel:
         self.anchor: tuple[int, int] = (0, 0)  # fixed corner of a selection
         self.selection: km.Rect | None = None
         self.mode: str = "default"
+        # Command-line echo a keymap may set (vim's ``:w``) via a Hint
+        # action; the shell shows it while in command mode. Empty at rest.
+        self.hint: str = ""
         self.min_rows = min_rows
         self.min_cols = min_cols
         # Where Ctrl+S writes: the file we loaded from, if any (None => Save As).
@@ -200,9 +203,12 @@ class GridModel:
         )
 
     def apply_action(self, action: km.Action | None):
-        """Execute the subset of the Action vocabulary this spike supports.
-        Returns ``("edit", row, col, seed)`` when the keymap wants the editor
-        opened (F2 / Enter / type-to-edit); otherwise ``None``."""
+        """Execute an Action from the keymap. Returns a frontend intent the
+        model cannot perform itself, for the shell to carry out:
+        ``("edit", row, col, seed)`` (open the editor — F2/Enter/type/vim ``i``),
+        ``("save", prompt)`` (vim ``:w``), or ``("quit", force)`` (vim ``:q``);
+        otherwise ``None``. A ``Chain`` runs its members in order and forwards
+        the last intent any of them produced (``:w`` = enter-normal + save)."""
         if action is None:
             return None
         if isinstance(action, km.Move):
@@ -217,9 +223,17 @@ class GridModel:
             self._recompute_window()
         elif isinstance(action, km.EnterMode):
             self.mode = action.name
-            if action.name == "default":
+            # "normal" is vim's resting mode (Excel's is "default"): both
+            # collapse any selection. "visual" opens a selection anchored at
+            # the cursor so the next motion extends from here.
+            if action.name in ("default", "normal"):
                 self.selection = None
                 self.anchor = self.cursor
+            elif action.name == "visual":
+                self.anchor = self.cursor
+                self.selection = (self.cursor, self.cursor)
+            if action.name != "command":
+                self.hint = ""
         elif isinstance(action, km.Operate):
             if action.op == "clear":
                 self._clear(action.rect)
@@ -229,6 +243,8 @@ class GridModel:
                 self._copy(action.rect, "cut")
             elif action.op == "paste":
                 self._paste(action.rect)
+        elif isinstance(action, km.Fill):
+            self._fill(self._op_rect(action.rect), action.axis)
         elif isinstance(action, km.Undo):
             if self.undo_log.undo():
                 self.dirty = True
@@ -239,6 +255,21 @@ class GridModel:
             self._recompute_window()
         elif isinstance(action, km.BeginEdit):
             return ("edit", self.cursor[0], self.cursor[1], action.seed)
+        elif isinstance(action, km.Chain):
+            # Run each member in order; forward the last intent produced (a
+            # ``:w`` chain is enter-normal then Save -> the save intent wins).
+            intent = None
+            for member in action.actions:
+                got = self.apply_action(member)
+                if got is not None:
+                    intent = got
+            return intent
+        elif isinstance(action, km.Hint):
+            self.hint = action.msg
+        elif isinstance(action, km.Save):
+            return ("save", action.prompt)
+        elif isinstance(action, km.Quit):
+            return ("quit", action.force)
         return None
 
 
@@ -343,6 +374,37 @@ class GridModel:
             self.sheet.set(addr, Cell(value=value))
         else:
             self.sheet.set(addr, value)
+
+    def _fill(self, rect: km.Rect, axis: str) -> None:
+        """Ctrl+D / Ctrl+R (Part 8 parity with the TUI): fill ``rect`` along
+        ``axis`` ("down"/"right") as ONE undo step. A 2+-lane rect fills from
+        its own first row/column (the source lane stays put); a single-lane
+        rect fills from the neighbour above/left — Excel's no-selection
+        gesture — and at the sheet edge there is nothing to fill from. Lanes
+        transfer independently through ``_paste_cell`` (formulas shift per
+        target, ``$`` pins hold, off-edge refs land as ``#REF!``, empty
+        sources clear their targets); the whole fill is one engine batch.
+        """
+        (r0, c0), (r1, c1) = rect
+        down = axis == "down"
+        lo, hi = (r0, r1) if down else (c0, c1)
+        if hi > lo:
+            src, first = lo, lo + 1  # source lane sits inside the rect
+        elif lo == 0:
+            return  # at the edge: nothing above/left to fill from
+        else:
+            src, first = lo - 1, lo  # the neighbour above/left
+        lanes = range(c0, c1 + 1) if down else range(r0, r1 + 1)
+        with self.sheet.batch():
+            for lane in lanes:
+                addr = (src, lane) if down else (lane, src)
+                cell = self.sheet.get(addr)
+                for t in range(first, hi + 1):
+                    tr, tc = (t, lane) if down else (lane, t)
+                    dr, dc = (t - src, 0) if down else (0, t - src)
+                    self._paste_cell(tr, tc, cell.formula, cell.value, dr, dc)
+        self.dirty = True
+        self._recompute_window()
 
     @staticmethod
     def _norm(a: tuple[int, int], b: tuple[int, int]) -> km.Rect:

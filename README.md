@@ -141,3 +141,38 @@ the construction code and callbacks are exercised for real.
 
 The standalone GUI project, moved out of the Trellis monorepo's `spikes/dpg-grid`.
 It depends only on the published `trellis` + `trellis-keymap` + `trellis-undo`.
+
+## Roadmap / TODO
+
+**Recently shipped:**
+
+- `Ctrl+D` / `Ctrl+R` fill — `grid_model.apply_action` honours the shared `ExcelKeymap`'s
+  `Fill` action (silently dropped before), mirroring the TUI: formulas shift per target lane,
+  `$` pins hold, off-edge refs become `#REF!`, one undo step.
+- **The model layer is now vim-ready.** `grid_model.apply_action` handles the full Action
+  vocabulary a stateful keymap emits: `Chain` (`dd` = copy+clear, `:w` = enter-normal+save),
+  `Hint` (the `:` command-line echo, stored on `model.hint`), and `Save`/`Quit` (returned as
+  `("save", prompt)` / `("quit", force)` intents for the shell). `EnterMode` now treats vim's
+  `normal` like Excel's `default` (collapses selection) and anchors a `visual` selection at the
+  cursor. Driven end-to-end through the real `VimKeymap`, all of `dd`/`yy`/`p`/visual-`y`/`:w`/`:q`
+  produce the right model state — proven by tests built from directly-constructed Actions (no vim
+  dependency in the suite).
+- *(main Trellis repo)* `trellis-tui-vim` renamed to **`trellis-vim`** (frontend-neutral), and
+  `trellis_keymap` now exposes `__version__`.
+
+**Open — vim support, the shell half.** The model is ready; what remains is the DearPyGui shell
+(`dpg_grid_hybrid.py`):
+
+- Hold ONE keymap instance via `trellis_keymap.load_keymap(name)` instead of constructing
+  `ExcelKeymap()` per keypress (a stateful keymap needs its parse state to persist), set from a
+  new `--keymap NAME` / `--vim` CLI flag.
+- Show the keymap mode in the bar (`-- NORMAL --` / `-- INSERT --` / `-- VISUAL --`, and
+  `model.hint` while in command mode) instead of just `[READY]`/`[EDIT]`.
+- Wire the `("save", ...)` / `("quit", ...)` intents returned from `apply_action` to the shell's
+  existing save / window-close.
+- **The reconciliation:** today the editing branch handles `Enter`/`Tab`/`Esc` directly, bypassing
+  the keymap — so vim's `Esc` would never reach the keymap and its mode would desync. Editing keys
+  need to route through the held keymap so modes stay in sync. **Decided:** `Esc` in insert mode
+  **cancels the in-progress edit** and returns to NORMAL (not the vim-standard commit) — uniform
+  with Excel's Esc-cancels, so the editing branch keeps its current cancel behaviour and *also*
+  drops the keymap to NORMAL.

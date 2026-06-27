@@ -269,3 +269,107 @@ def test_paste_with_empty_clipboard_is_noop():
     m.cursor = (1, 0)
     feed(m, "ctrl+v")                        # nothing copied yet
     assert sh.get((1, 0)).is_empty()
+
+
+# --------------------------------------------------------------- fill (Ctrl+D/R)
+# Ctrl+D/Ctrl+R go keymap -> km.Fill -> apply_action._fill, the path that was
+# silently dropped before the Fill handler existed.
+
+
+def test_fill_down_multilane_shifts_formulas():
+    m, sh = model()
+    m.commit(0, 0, "10")                     # A1
+    m.commit(0, 1, "=A1*2")                  # B1 -> 20
+    m.selection = ((0, 0), (3, 1)); m.anchor = (0, 0); m.cursor = (3, 1)  # A1:B4
+    feed(m, "ctrl+d")                        # fill down from row 1
+    assert sh["A4"].value == 10              # value copies
+    assert sh["B2"].formula == "=A2*2"       # formula shifts per target lane
+    assert sh["B4"].formula == "=A4*2"
+
+
+def test_fill_right_shifts_formulas():
+    m, sh = model()
+    m.commit(0, 0, "5")                      # A1
+    m.commit(1, 0, "=A1+1")                  # A2 -> 6
+    m.selection = ((0, 0), (1, 2)); m.anchor = (0, 0); m.cursor = (1, 2)  # A1:C2
+    feed(m, "ctrl+r")                        # fill right from column A
+    assert sh["C1"].value == 5
+    assert sh["C2"].formula == "=C1+1"
+
+
+def test_fill_down_no_selection_uses_neighbour_above():
+    m, sh = model()
+    m.commit(0, 0, "42")                     # A1
+    m.cursor = (1, 0); m.anchor = (1, 0)     # cursor on A2, no selection
+    feed(m, "ctrl+d")                        # fills A2 from A1 (neighbour above)
+    assert sh["A2"].value == 42
+
+
+def test_fill_at_top_edge_is_noop():
+    m, sh = model()
+    m.cursor = (0, 0); m.anchor = (0, 0)     # row 0: nothing above to fill from
+    feed(m, "ctrl+d")                        # must not raise, writes nothing
+    assert sh.get((0, 0)).is_empty()
+
+
+def test_fill_is_one_undo_step():
+    m, sh = model()
+    m.commit(0, 0, "1")
+    m.selection = ((0, 0), (2, 0)); m.anchor = (0, 0); m.cursor = (2, 0)  # A1:A3
+    feed(m, "ctrl+d")
+    assert sh["A3"].value == 1
+    feed(m, "ctrl+z")                        # one undo unwinds the whole fill
+    assert sh.get((2, 0)).is_empty() and sh.get((1, 0)).is_empty()
+
+
+# ----------------------------------------------------- vim Action vocabulary
+# grid_model is keymap-agnostic: it handles the Actions a stateful keymap (vim)
+# emits — Chain, Hint, Save, Quit — built directly here, no vim dependency.
+
+
+def test_chain_runs_members_in_order():
+    m, sh = model()
+    m.commit(0, 0, "5")                          # A1 = 5
+    m.cursor = (0, 0)
+    # dd-shaped chain: copy then clear the cursor cell
+    m.apply_action(km.Chain((km.Operate("copy", ((0, 0), (0, 0))),
+                             km.Operate("clear", ((0, 0), (0, 0))))))
+    assert sh.get((0, 0)).is_empty()             # cleared (second member)
+    assert m.clipboard is not None               # copied first (first member)
+
+
+def test_chain_forwards_save_intent():
+    m, sh = model()
+    intent = m.apply_action(km.Chain((km.EnterMode("normal"), km.Save(prompt=False))))
+    assert intent == ("save", False)             # :w-shaped chain
+    assert m.mode == "normal"                    # the earlier member still ran
+
+
+def test_hint_is_stored_then_cleared_leaving_command():
+    m, sh = model()
+    m.apply_action(km.Hint(":w"))
+    assert m.hint == ":w"
+    m.apply_action(km.EnterMode("normal"))
+    assert m.hint == ""
+
+
+def test_save_and_quit_actions_return_intents():
+    m, sh = model()
+    assert m.apply_action(km.Save(prompt=True)) == ("save", True)
+    assert m.apply_action(km.Quit(force=False)) == ("quit", False)
+
+
+def test_enter_normal_clears_selection():
+    m, sh = model()
+    m.selection = ((0, 0), (2, 2)); m.anchor = (0, 0); m.cursor = (2, 2)
+    m.apply_action(km.EnterMode("normal"))
+    assert m.selection is None and m.anchor == m.cursor
+
+
+def test_enter_visual_anchors_selection_at_cursor():
+    m, sh = model()
+    m.cursor = (2, 1)
+    m.apply_action(km.EnterMode("visual"))
+    assert m.mode == "visual"
+    assert m.anchor == (2, 1)
+    assert m.selection == ((2, 1), (2, 1))
