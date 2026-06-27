@@ -310,3 +310,40 @@ def test_status_message_clears_on_move(ctx):
     assert dpg.get_value(g.MSG) == "Copied 1\u00d71"
     g._set_msg("")                                  # what a plain move does
     assert dpg.get_value(g.MSG) == ""
+
+
+
+# ------------------------------------------------ live engine -> grid repaint
+def test_active_grid_repaints_live_on_engine_change(ctx):
+    g, m, sh = _grid([("A1", 10)])
+    sh["A1"] = 99                                   # mutate the engine directly (REPL-style)
+    assert dpg.get_value(g.cell_tag(0, 0)) == "99"  # grid repainted with no explicit refresh()
+
+
+def test_cross_sheet_dependent_repaints_live_when_its_sheet_active(ctx):
+    g, m, sh1 = _grid([("A1", 10)])
+    g._new()                                        # Sheet2 active
+    g.model.commit(0, 0, "=Sheet1!A1")              # Sheet2!A1 -> 10
+    assert dpg.get_value(g.cell_tag(0, 0)) == "10"
+    # change Sheet1!A1 while Sheet2 is the visible tab; the recalc cascade lands
+    # on Sheet2!A1, which is on screen -> it repaints live, no tab switch
+    g.wb["Sheet1"]["A1"] = 42
+    assert dpg.get_value(g.cell_tag(0, 0)) == "42"
+
+
+def test_live_repaint_skips_while_editing(ctx):
+    g, m, sh = _grid([("A1", 10)])
+    g._on_key(None, dpg.mvKey_F2)                   # begin in-place edit on A1
+    dpg.set_value(g.cell_tag(0, 0), "in-progress")
+    sh["B1"] = 7                                    # engine change while editing
+    assert g.editing is True
+    assert dpg.get_value(g.cell_tag(0, 0)) == "in-progress"   # editor not clobbered
+
+
+def test_inactive_sheet_change_does_not_touch_active_grid(ctx):
+    g, m, sh1 = _grid([("A1", 10)])                 # Sheet1 (will become inactive)
+    g._new()                                        # Sheet2 active, blank
+    g.wb["Sheet1"]["A1"] = 5                        # change the hidden sheet
+    assert dpg.get_value(g.cell_tag(0, 0)) == ""    # active (Sheet2) grid untouched
+    g._switch_to(0)
+    assert dpg.get_value(g.cell_tag(0, 0)) == "5"   # switching shows the fresh value

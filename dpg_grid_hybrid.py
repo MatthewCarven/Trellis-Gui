@@ -138,6 +138,7 @@ class HybridGrid:
             dpg.add_mouse_release_handler(button=dpg.mvMouseButton_Left, callback=self._on_mouse_release)
 
         self.refresh()
+        self._subscribe_engine()
 
     def _rebuild_table(self) -> None:
         if dpg.does_item_exist(self.TABLE):
@@ -241,6 +242,38 @@ class HybridGrid:
                 self._set_msg(f"Pasted {rows}×{cols}")
         elif op == "clear":
             self._set_msg("Cleared")
+
+    # --------------------------------------------- live engine -> grid repaint
+    def _subscribe_engine(self) -> None:
+        """Make the visible grid repaint whenever the engine changes underneath
+        it — a cross-sheet recalc cascade landing on the active sheet, or a
+        direct edit to these same objects from a REPL/script (the library-first
+        thesis). Inactive sheets aren't drawn, so we repaint only when the
+        changed sheet is the active one; switching tabs repaints from scratch
+        regardless. Sheets added later (New/Open) are watched as they appear.
+
+        Wildcard ``*`` handlers fire after the recalc engine's own cell:change
+        handler, so by the time we repaint the dependent values are already
+        recomputed. (One repaint per change event — fine at CSV scale; coalesce
+        if a sheet ever gets large.)"""
+        for name in list(self.wb):
+            self._watch_sheet(self.wb[name])
+        self.wb.on("sheet:add", lambda sheet, **kw: self._watch_sheet(sheet))
+
+    def _watch_sheet(self, sheet) -> None:
+        sheet.on("*", lambda event, **kw: self._on_engine_event(sheet))
+
+    def _on_engine_event(self, sheet) -> None:
+        # Repaint only the visible grid, and never mid-edit (a repaint would
+        # fight the in-place editor). Swallow render errors: a handler exception
+        # propagates out of the engine's emit and would break the very write
+        # that triggered it.
+        if self.editing or sheet is not self.model.sheet:
+            return
+        try:
+            self.refresh()
+        except Exception:
+            pass
 
     # ---------------------------------------------------------- key handling
     def _on_key(self, sender, app_data) -> None:

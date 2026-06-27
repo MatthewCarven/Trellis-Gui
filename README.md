@@ -39,7 +39,7 @@ adapter" the keymap contract always anticipated, now in its DPG flavour. The
   (address, cursor-cell source, READY/EDIT), **+ readable fixed-width columns**.
   `python dpg_grid_hybrid.py demo.csv`.
 - `test_grid_model.py` (40) + `test_dpg_headless.py` (9) + `test_inplace_headless.py`
-  (7) + `test_hybrid_headless.py` (28) = **84 headless tests** — see "What's verified".
+  (7) + `test_hybrid_headless.py` (32) = **88 headless tests** — see "What's verified".
 - `demo.csv` — a tiny budget with live formulas (`=B2*C2`, `=SUM(D2:D5)`).
 
 ## Run it
@@ -107,7 +107,7 @@ Frictions variant B (and so C) surfaces (the point of the exercise — eyeball t
 
 ## What's verified vs. what to check on first run
 
-**Verified headlessly (84 tests, no GPU):** the model logic, the commit policy,
+**Verified headlessly (88 tests, no GPU):** the model logic, the commit policy,
 **recalc propagation showing up in the grid** (both variants), the keymap driving
 the cursor, type-to-edit seeding, the window growing to cover new far cells, and
 variant B's full modal flow (F2/type begins, Enter/Tab commit + move, Esc
@@ -138,7 +138,10 @@ the construction code and callbacks are exercised for real.
   multi-sheet tabs (`Ctrl+W` closes, with an unsaved-changes guard). All tabs share
   one Workbook, so a formula can reference another sheet by name (`=Sheet2!A1`) and
   the shared recalc keeps it live; each tab's caption shows its sheet name with a
-  `*` dirty marker.
+  `*` dirty marker. The visible grid repaints live when the engine changes
+  underneath it — a cross-sheet recalc cascade landing on the active sheet, or a
+  direct edit to the same objects from a REPL (the library-first thesis), shows up
+  without a manual refresh.
 
 ## Status
 
