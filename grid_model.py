@@ -346,6 +346,20 @@ class GridModel:
         verb = "Cut" if clip.mode == "cut" else "Copied"
         return f"{verb} {rows}×{cols}"
 
+    def clipboard_region(self):
+        """The source rectangle + mode of the current clipboard, for a frontend
+        to mark (Excel's marching ants), or ``None``. The rect is
+        ``((r0,c0),(r1,c1))`` reconstructed from the snapshot's anchor and
+        dimensions; mode is ``"copy"`` / ``"cut"``. Frontend-neutral and
+        headless-testable."""
+        clip = self.clipboard
+        if clip is None:
+            return None
+        rows = len(clip.cells)
+        cols = len(clip.cells[0]) if rows else 0
+        r0, c0 = clip.anchor
+        return (((r0, c0), (r0 + rows - 1, c0 + cols - 1)), clip.mode)
+
     def _paste(self, rect: km.Rect | None) -> None:
         """Stamp the clipboard at the target's top-left as ONE undo step.
         Copy mode shifts formulas by the paste offset (a 1×1 payload fills the

@@ -386,3 +386,16 @@ def test_clipboard_summary_reports_size_and_mode():
     assert m.clipboard_summary() == "Copied 1\u00d72"
     feed(m, "ctrl+x")
     assert m.clipboard_summary() == "Cut 1\u00d72"
+
+
+def test_clipboard_region_reports_rect_and_mode():
+    m, sh = model()
+    assert m.clipboard_region() is None              # nothing copied yet
+    sh["A1"] = 1
+    sh["B1"] = 2
+    m.selection = ((0, 0), (0, 1))                   # a 1x2 block
+    m.cursor = (0, 1)
+    feed(m, "ctrl+c")
+    assert m.clipboard_region() == (((0, 0), (0, 1)), "copy")
+    feed(m, "ctrl+x")
+    assert m.clipboard_region() == (((0, 0), (0, 1)), "cut")

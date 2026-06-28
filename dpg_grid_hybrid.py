@@ -14,6 +14,7 @@ Run:  python dpg_grid_hybrid.py demo.csv
 from __future__ import annotations
 
 import sys
+import time
 from pathlib import Path
 
 import dearpygui.dearpygui as dpg
@@ -27,6 +28,7 @@ from grid_model import GridModel
 COL_WIDTH = 92       # fixed data-column width (px) — the readability fix
 ROW_LABEL_WIDTH = 40
 TABLE_HEIGHT = 400   # scrolls past this rather than growing the window forever
+MSG_FLASH_SECONDS = 3.0  # how long a copy/cut/paste status message stays up
 
 
 class HybridGrid:
@@ -54,6 +56,7 @@ class HybridGrid:
         self._tab_index: dict = {}
         self._tab_tags: dict[int, int | str] = {}   # tab index -> dpg tab tag
         self._status_msg = ""                        # transient copy/cut/paste feedback
+        self._msg_expiry: float | None = None        # when the flash message auto-clears
         self.editing = False
         self._named = None
         self._ready_theme = None
@@ -61,6 +64,9 @@ class HybridGrid:
         self._highlighted: list[str] = []
         self._selecting = False
         self._sel_theme = None
+        self._copy_theme = None     # marquee tint for a copied source region
+        self._cut_theme = None      # dimmed style for a cut source region
+        self._marquee = None        # (rect, mode) of the clipboard source, or None
         self._pending = None        # a deferred action awaiting the unsaved-changes modal
         self._built_dims: tuple[int, int] | None = None
 
@@ -79,6 +85,13 @@ class HybridGrid:
         with dpg.theme() as self._sel_theme:
             with dpg.theme_component(dpg.mvInputText):
                 dpg.add_theme_color(dpg.mvThemeCol_FrameBg, (38, 60, 96))
+        with dpg.theme() as self._copy_theme:           # copied source: amber marquee tint
+            with dpg.theme_component(dpg.mvInputText):
+                dpg.add_theme_color(dpg.mvThemeCol_FrameBg, (96, 80, 30))
+        with dpg.theme() as self._cut_theme:            # cut source: dimmed
+            with dpg.theme_component(dpg.mvInputText):
+                dpg.add_theme_color(dpg.mvThemeCol_FrameBg, (34, 34, 34))
+                dpg.add_theme_color(dpg.mvThemeCol_Text, (110, 110, 110))
 
         # File menu — makes the Ctrl+N/O/S gestures discoverable.
         with dpg.menu_bar(parent=parent):
@@ -174,6 +187,7 @@ class HybridGrid:
 
     # -------------------------------------------------------------- refresh
     def refresh(self) -> None:
+        self._tick_status()
         w = self.model.window
         if self._built_dims != (w.nrows, w.ncols):
             self._rebuild_table()
@@ -194,6 +208,16 @@ class HybridGrid:
             if dpg.does_item_exist(t):
                 dpg.bind_item_theme(t, 0)
         self._highlighted = []
+        if self._marquee is not None:
+            rect, mode = self._marquee
+            mtheme = self._cut_theme if mode == "cut" else self._copy_theme
+            (mt, ml), (mb, mr) = rect
+            for r in range(mt, mb + 1):
+                for c in range(ml, mr + 1):
+                    tag = self.cell_tag(r, c)
+                    if dpg.does_item_exist(tag) and mtheme is not None:
+                        dpg.bind_item_theme(tag, mtheme)
+                        self._highlighted.append(tag)
         sel = self.model.selection
         if sel is not None and self._sel_theme is not None:
             (t0, l0), (b0, r0) = sel
@@ -224,24 +248,63 @@ class HybridGrid:
 
     # ------------------------------------------------- clipboard feedback
     def _set_msg(self, text: str) -> None:
-        """Set the transient status message (copy/cut/paste feedback)."""
+        """Set the transient status message. A non-empty message 'flashes' — it
+        auto-clears after MSG_FLASH_SECONDS (see _tick_status), so it can outlive
+        the keypress that set it without sticking around forever."""
         self._status_msg = text
+        self._msg_expiry = (time.monotonic() + MSG_FLASH_SECONDS) if text else None
         if dpg.does_item_exist(self.MSG):
             dpg.set_value(self.MSG, text)
 
+    def _tick_status(self, now: float | None = None) -> None:
+        """Clear the flash message once it has been up for MSG_FLASH_SECONDS.
+        Driven by the render loop (every frame) and by refresh(); ``now`` is
+        injectable for headless testing."""
+        if self._status_msg and self._msg_expiry is not None:
+            now = time.monotonic() if now is None else now
+            if now >= self._msg_expiry:
+                self._set_msg("")
+
     def _feedback_for_operate(self, op: str) -> None:
-        """Show what a clipboard Operate just did. Copy/cut report the
-        clipboard size; paste reports the stamped size; clear says so."""
+        """React to a clipboard Operate: flash a coordinate message and mark the
+        source region. Copy/cut set the marquee (source highlighted/dimmed until
+        paste, Escape, or the next copy); paste stamps and clears the marquee."""
         if op in ("copy", "cut"):
-            self._set_msg(self.model.clipboard_summary() or "")
+            region = self.model.clipboard_region()
+            if region is not None:
+                rect, mode = region
+                self._marquee = region
+                verb = "Cut" if mode == "cut" else "Copied"
+                self._set_msg(f"{verb} {self._a1_range(rect)}")
         elif op == "paste":
             clip = self.model.clipboard
             if clip is not None:
-                rows = len(clip.cells)
-                cols = len(clip.cells[0]) if rows else 0
-                self._set_msg(f"Pasted {rows}×{cols}")
+                if self.model.selection is not None:
+                    target = self.model.selection
+                else:
+                    rows = len(clip.cells)
+                    cols = len(clip.cells[0]) if rows else 0
+                    tr, tc = self.model.cursor
+                    target = ((tr, tc), (tr + rows - 1, tc + cols - 1))
+                self._set_msg(f"Pasted {self._a1_range(target)}")
+            self._marquee = None
         elif op == "clear":
             self._set_msg("Cleared")
+            self._marquee = None
+
+    @staticmethod
+    def _a1_range(rect) -> str:
+        (r0, c0), (r1, c1) = rect
+        a = to_a1(r0, c0)
+        return a if (r0, c0) == (r1, c1) else f"{a}:{to_a1(r1, c1)}"
+
+    def _cancel_clipboard(self) -> None:
+        """Escape with nothing being edited: drop the clipboard and its marquee
+        (and the flash message) — Excel cancelling the marching ants."""
+        self.model.clipboard = None
+        self._marquee = None
+        self._set_msg("")
+        self.refresh()
 
     # --------------------------------------------- live engine -> grid repaint
     def _subscribe_engine(self) -> None:
@@ -305,10 +368,11 @@ class HybridGrid:
         if kp.ctrl and kp.key == "w":
             self._close_tab()
             return
+        if kp.key == "escape":
+            self._cancel_clipboard()   # cancel a pending copy/cut (marquee + clipboard)
         action = km.ExcelKeymap().handle(kp, self.model.key_context())
         intent = self.model.apply_action(action)
         if intent and intent[0] == "edit":
-            self._set_msg("")
             self._begin_edit(seed=intent[3])
         elif isinstance(action, km.Operate):
             self._feedback_for_operate(action.op)
@@ -316,7 +380,6 @@ class HybridGrid:
             if dpg.does_item_exist(self.cell_tag(*self.model.cursor)):
                 dpg.focus_item(self.cell_tag(*self.model.cursor))
         elif isinstance(action, (km.Move, km.MoveTo, km.Select, km.EnterMode, km.Undo, km.Redo)):
-            self._set_msg("")   # any plain navigation clears stale clipboard feedback
             self.refresh()
             if dpg.does_item_exist(self.cell_tag(*self.model.cursor)):
                 dpg.focus_item(self.cell_tag(*self.model.cursor))
@@ -594,7 +657,11 @@ class HybridGrid:
         dpg.setup_dearpygui()
         dpg.show_viewport()
         dpg.set_primary_window("primary", True)
-        dpg.start_dearpygui()
+        # Manual render loop so the flash message can auto-clear after a few
+        # seconds even when the user isn't pressing keys.
+        while dpg.is_dearpygui_running():
+            self._tick_status()
+            dpg.render_dearpygui_frame()
         dpg.destroy_context()
 
 

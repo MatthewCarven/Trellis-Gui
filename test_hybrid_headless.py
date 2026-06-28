@@ -296,19 +296,24 @@ def test_copy_cut_paste_status_feedback(ctx):
     g, m, sh = _grid([("A1", 5)])
     m.cursor = (0, 0)
     m.apply_action(km.Operate("copy")); g._feedback_for_operate("copy")
-    assert dpg.get_value(g.MSG) == "Copied 1\u00d71"
+    assert dpg.get_value(g.MSG) == "Copied A1"          # coordinates, not RxC
+    assert g._marquee == (((0, 0), (0, 0)), "copy")
     m.apply_action(km.Operate("cut")); g._feedback_for_operate("cut")
-    assert dpg.get_value(g.MSG) == "Cut 1\u00d71"
+    assert dpg.get_value(g.MSG) == "Cut A1"
+    assert g._marquee[1] == "cut"
     m.cursor = (2, 2)
     m.apply_action(km.Operate("paste")); g._feedback_for_operate("paste")
-    assert dpg.get_value(g.MSG) == "Pasted 1\u00d71"
+    assert dpg.get_value(g.MSG) == "Pasted C3"          # 1x1 stamp at the cursor
+    assert g._marquee is None                            # paste clears the marquee
 
 
-def test_status_message_clears_on_move(ctx):
+def test_status_message_flashes_then_expires(ctx):
     g, m, sh = _grid([("A1", 5)])
-    g._set_msg("Copied 1\u00d71")
-    assert dpg.get_value(g.MSG) == "Copied 1\u00d71"
-    g._set_msg("")                                  # what a plain move does
+    g._set_msg("Copied A1")
+    exp = g._msg_expiry
+    g._tick_status(now=exp - 0.1)                    # still within the flash window
+    assert dpg.get_value(g.MSG) == "Copied A1"
+    g._tick_status(now=exp + 0.1)                    # past it -> auto-cleared
     assert dpg.get_value(g.MSG) == ""
 
 
@@ -347,3 +352,44 @@ def test_inactive_sheet_change_does_not_touch_active_grid(ctx):
     assert dpg.get_value(g.cell_tag(0, 0)) == ""    # active (Sheet2) grid untouched
     g._switch_to(0)
     assert dpg.get_value(g.cell_tag(0, 0)) == "5"   # switching shows the fresh value
+
+
+
+# --------------------------------------------- clipboard marquee + Escape-cancel
+def test_marquee_paints_copied_source(ctx):
+    g, m, sh = _grid([("A1", 1), ("A2", 2)])
+    m.selection = ((0, 0), (1, 0)); m.cursor = (1, 0)
+    m.apply_action(km.Operate("copy")); g._feedback_for_operate("copy")
+    g.refresh()
+    assert g._marquee == (((0, 0), (1, 0)), "copy")
+    assert dpg.get_value(g.MSG) == "Copied A1:A2"
+    for r in (0, 1):                                 # both source cells get painted
+        assert g.cell_tag(r, 0) in g._highlighted
+
+
+def test_cut_marquee_uses_cut_mode(ctx):
+    g, m, sh = _grid([("A1", 1)])
+    m.cursor = (0, 0)
+    m.apply_action(km.Operate("cut")); g._feedback_for_operate("cut")
+    assert g._marquee == (((0, 0), (0, 0)), "cut")
+
+
+def test_escape_cancels_clipboard(ctx):
+    g, m, sh = _grid([("A1", 1)])
+    m.cursor = (0, 0)
+    m.apply_action(km.Operate("copy")); g._feedback_for_operate("copy")
+    assert m.clipboard is not None and g._marquee is not None
+    g._on_key(None, dpg.mvKey_Escape)               # Escape, not editing
+    assert m.clipboard is None                        # clipboard dropped
+    assert g._marquee is None                         # marquee gone
+    assert dpg.get_value(g.MSG) == ""
+
+
+def test_paste_clears_marquee(ctx):
+    g, m, sh = _grid([("A1", 5)])
+    m.cursor = (0, 0)
+    m.apply_action(km.Operate("copy")); g._feedback_for_operate("copy")
+    assert g._marquee is not None
+    m.cursor = (1, 1)
+    m.apply_action(km.Operate("paste")); g._feedback_for_operate("paste")
+    assert g._marquee is None
