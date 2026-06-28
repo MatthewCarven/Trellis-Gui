@@ -31,6 +31,18 @@ TABLE_HEIGHT = 400   # scrolls past this rather than growing the window forever
 MSG_FLASH_SECONDS = 3.0  # how long a copy/cut/paste status message stays up
 
 
+def cell_at(pos, rects):
+    """Pure hit-test: the (row, col) whose pixel rectangle contains ``pos`` (an
+    (x, y) point), or ``None``. ``rects`` maps (r, c) -> ((x0, y0), (x1, y1)).
+    Kept free of DearPyGui so the Shift+drag geometry is unit-testable without a
+    live mouse; the thin glue that reads real rects/positions lives on the grid."""
+    x, y = pos
+    for key, ((x0, y0), (x1, y1)) in rects.items():
+        if x0 <= x <= x1 and y0 <= y <= y1:
+            return key
+    return None
+
+
 class HybridGrid:
     TABLE = "hy_table"
     HOLDER = "hy_holder"
@@ -63,6 +75,7 @@ class HybridGrid:
         self._edit_theme = None
         self._highlighted: list[str] = []
         self._selecting = False
+        self._shift_select = False   # a Shift+drag rectangle selection is in progress
         self._sel_theme = None
         self._copy_theme = None     # marquee tint for a copied source region
         self._cut_theme = None      # dimmed style for a cut source region
@@ -612,27 +625,92 @@ class HybridGrid:
     def _end_mouse_select(self) -> None:
         self._selecting = False
 
+    # ---- Shift+drag rectangle selection (geometry-based, Shift-gated) -------
+    # Runs ONLY while Shift is held; every non-Shift path is unchanged, so the
+    # existing click / edit / plain-drag behaviour is untouched. We hit-test by
+    # pixel geometry (mouse pos vs each cell's rect) rather than hover, because an
+    # active input_text captures the mouse and breaks hover scanning mid-drag.
+    def _shift_down(self) -> bool:  # pragma: no cover (live key poll)
+        return bool(dpg.is_key_down(dpg.mvKey_LShift)
+                    or dpg.is_key_down(dpg.mvKey_RShift))
+
+    def _visible_cell_rects(self) -> dict:  # pragma: no cover (needs live items)
+        rects = {}
+        w = self.model.window
+        for r in w.rows:
+            for c in w.cols:
+                tag = self.cell_tag(r, c)
+                if dpg.does_item_exist(tag):
+                    rects[(r, c)] = (tuple(dpg.get_item_rect_min(tag)),
+                                     tuple(dpg.get_item_rect_max(tag)))
+        return rects
+
+    def _cell_at_mouse(self):  # pragma: no cover (needs live mouse)
+        return cell_at(tuple(dpg.get_mouse_pos(local=False)), self._visible_cell_rects())
+
+    def _begin_shift_select(self, cell) -> None:
+        self.model.cursor = cell
+        self.model.anchor = cell
+        self.model.selection = (cell, cell)
+        self._shift_select = True
+        self.refresh()
+
+    def _shift_drag_to(self, cell) -> None:
+        if not self._shift_select:
+            return
+        self.model.cursor = cell
+        self.model.selection = self.model._norm(self.model.anchor, cell)
+        self.refresh()
+
+    def _end_shift_select(self) -> None:
+        self._shift_select = False
+
+    def _tick_cursor(self) -> None:  # pragma: no cover (needs live viewport)
+        # While Shift is held, show the four-arrow cursor as the "draw a
+        # selection" affordance (DPG has no true crosshair); restore otherwise.
+        cursor = dpg.mvMouseCursor_ResizeAll if self._shift_down() else dpg.mvMouseCursor_Arrow
+        dpg.set_mouse_cursor(cursor)
+
     def _on_mouse_down(self, sender, app_data) -> None:  # pragma: no cover (needs mouse)
-        if self.editing or self._selecting:
+        if self.editing:
+            return
+        if self._shift_down():                       # Shift -> draw a rectangle
+            cell = self._cell_at_mouse()
+            if cell is not None:
+                self._begin_shift_select(cell)
+            return
+        if self._selecting:
             return
         cell = self._cell_under_mouse()
         if cell is not None:
             self._begin_mouse_select(cell)
 
     def _on_mouse_drag(self, sender, app_data) -> None:  # pragma: no cover (needs mouse)
-        if self.editing or not self._selecting:
+        if self.editing:
+            return
+        if self._shift_select:
+            cell = self._cell_at_mouse()
+            if cell is not None:
+                self._shift_drag_to(cell)
+            return
+        if not self._selecting:
             return
         cell = self._cell_under_mouse()
         if cell is not None:
             self._drag_select_to(cell)
 
     def _on_mouse_release(self, sender, app_data) -> None:  # pragma: no cover (needs mouse)
+        if self._shift_select:
+            self._end_shift_select()
+            return
         self._end_mouse_select()
 
     # -------------------------------------------------- per-cell handlers
 
 
     def _on_cell_focus(self, sender, app_data, user_data) -> None:
+        if self._shift_select:
+            return                       # mid Shift-drag: keep the rectangle, ignore the focus
         if not self.editing:
             self.model.cursor = user_data
             self.model.anchor = user_data
@@ -661,6 +739,7 @@ class HybridGrid:
         # seconds even when the user isn't pressing keys.
         while dpg.is_dearpygui_running():
             self._tick_status()
+            self._tick_cursor()
             dpg.render_dearpygui_frame()
         dpg.destroy_context()
 

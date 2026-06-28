@@ -8,7 +8,7 @@ import pytest
 import trellis_keymap as km
 from trellis import Workbook, read_csv
 
-from dpg_grid_hybrid import HybridGrid
+from dpg_grid_hybrid import HybridGrid, cell_at
 from grid_model import GridModel
 
 
@@ -393,3 +393,44 @@ def test_paste_clears_marquee(ctx):
     m.cursor = (1, 1)
     m.apply_action(km.Operate("paste")); g._feedback_for_operate("paste")
     assert g._marquee is None
+
+
+
+# ------------------------------------------------ Shift+drag rectangle selection
+def test_cell_at_hit_test():
+    rects = {
+        (0, 0): ((0, 0), (10, 10)),
+        (0, 1): ((10, 0), (20, 10)),
+        (1, 0): ((0, 10), (10, 20)),
+    }
+    assert cell_at((5, 5), rects) == (0, 0)
+    assert cell_at((15, 5), rects) == (0, 1)
+    assert cell_at((5, 15), rects) == (1, 0)
+    assert cell_at((50, 50), rects) is None        # outside every cell
+
+
+def test_shift_drag_selects_rectangle(ctx):
+    g, m, sh = _grid([])
+    g._begin_shift_select((0, 0))                   # Shift+press on A1
+    assert g._shift_select is True
+    assert m.selection == ((0, 0), (0, 0)) and m.cursor == (0, 0)
+    g._shift_drag_to((2, 1))                         # drag to B3
+    assert m.selection == ((0, 0), (2, 1)) and m.cursor == (2, 1)
+    g._end_shift_select()
+    assert g._shift_select is False
+
+
+def test_shift_drag_normalizes_backwards(ctx):
+    g, m, sh = _grid([])
+    g._begin_shift_select((2, 2))                   # anchor at C3
+    g._shift_drag_to((0, 0))                         # drag up-left to A1
+    assert m.selection == ((0, 0), (2, 2))          # normalised rectangle
+    g._end_shift_select()
+
+
+def test_shift_focus_guard_keeps_selection(ctx):
+    g, m, sh = _grid([("A1", 1)])
+    g._begin_shift_select((0, 0))
+    g._shift_drag_to((1, 1))
+    g._on_cell_focus(None, None, (0, 0))            # a Shift-press focus mid-drag
+    assert m.selection == ((0, 0), (1, 1))          # selection survives (not cleared)

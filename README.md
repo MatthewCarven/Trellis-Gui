@@ -39,7 +39,7 @@ adapter" the keymap contract always anticipated, now in its DPG flavour. The
   (address, cursor-cell source, READY/EDIT), **+ readable fixed-width columns**.
   `python dpg_grid_hybrid.py demo.csv`.
 - `test_grid_model.py` (41) + `test_dpg_headless.py` (9) + `test_inplace_headless.py`
-  (7) + `test_hybrid_headless.py` (36) = **93 headless tests** — see "What's verified".
+  (7) + `test_hybrid_headless.py` (40) = **97 headless tests** — see "What's verified".
 - `demo.csv` — a tiny budget with live formulas (`=B2*C2`, `=SUM(D2:D5)`).
 
 ## Run it
@@ -107,7 +107,7 @@ Frictions variant B (and so C) surfaces (the point of the exercise — eyeball t
 
 ## What's verified vs. what to check on first run
 
-**Verified headlessly (93 tests, no GPU):** the model logic, the commit policy,
+**Verified headlessly (97 tests, no GPU):** the model logic, the commit policy,
 **recalc propagation showing up in the grid** (both variants), the keymap driving
 the cursor, type-to-edit seeding, the window growing to cover new far cells, and
 variant B's full modal flow (F2/type begins, Enter/Tab commit + move, Esc
@@ -119,6 +119,10 @@ the construction code and callbacks are exercised for real.
 - The cursor highlight theme and the formula-bar focus hand-off.
 - `is_key_down` modifier polling for `Ctrl+A` / `Ctrl+Home` (headless it reads
   no keys down, so those paths are tested via the model, not through DPG).
+- Shift+drag rectangle selection: the geometry hit-test (`cell_at`) and the
+  selection flow are unit-tested, but the live mouse-position-to-cell-rect
+  coordinate mapping, the four-arrow cursor, and a focused cell not hijacking the
+  drag need eyeballing on a real viewport.
 
 ## Ergonomic questions this spike is meant to surface
 
@@ -135,8 +139,9 @@ the construction code and callbacks are exercised for real.
   dialog), copy/cut/paste (`Ctrl+C`/`X`/`V`, formulas shift on paste; the source
   region is marked until paste or `Esc` — an amber tint for copy, dimmed for cut —
   and a coordinate flash like "Copied A1:B2" appears in the status bar for a few
-  seconds), mouse drag-select with a
-  visible selection rectangle, Open/New (`Ctrl+O`/`Ctrl+N`) plus a File menu, and
+  seconds), mouse selection — hold Shift and drag to draw a cell rectangle
+  (geometry hit-test, so it works over the editable cells), plus the older plain
+  drag — with a visible selection rectangle, Open/New (`Ctrl+O`/`Ctrl+N`) plus a File menu, and
   multi-sheet tabs (`Ctrl+W` closes, with an unsaved-changes guard). All tabs share
   one Workbook, so a formula can reference another sheet by name (`=Sheet2!A1`) and
   the shared recalc keeps it live; each tab's caption shows its sheet name with a
