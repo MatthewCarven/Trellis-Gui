@@ -76,6 +76,7 @@ class HybridGrid:
         self._highlighted: list[str] = []
         self._selecting = False
         self._shift_select = False   # a Shift+drag rectangle selection is in progress
+        self._shift_hint = False     # whether the status bar is showing the Shift hint
         self._sel_theme = None
         self._copy_theme = None     # marquee tint for a copied source region
         self._cut_theme = None      # dimmed style for a cut source region
@@ -665,11 +666,21 @@ class HybridGrid:
     def _end_shift_select(self) -> None:
         self._shift_select = False
 
-    def _tick_cursor(self) -> None:  # pragma: no cover (needs live viewport)
-        # While Shift is held, show the four-arrow cursor as the "draw a
-        # selection" affordance (DPG has no true crosshair); restore otherwise.
-        cursor = dpg.mvMouseCursor_ResizeAll if self._shift_down() else dpg.mvMouseCursor_Arrow
-        dpg.set_mouse_cursor(cursor)
+    def _tick_shift_hint(self) -> None:  # pragma: no cover (needs live viewport)
+        # DearPyGui 2.x exposes no mouse-cursor API, so we can't swap to a
+        # crosshair. Instead, while Shift is held (and nothing is flashing) we
+        # show a one-line hint in the status bar; it doubles as a live signal
+        # that Shift is being detected at all.
+        if self.editing:
+            return
+        down = self._shift_down()
+        if down and not self._status_msg:
+            dpg.set_value(self.MSG, "\u21e7 drag or shift-click to select")
+            self._shift_hint = True
+        elif not down and self._shift_hint:
+            if not self._status_msg:
+                dpg.set_value(self.MSG, "")
+            self._shift_hint = False
 
     def _on_mouse_down(self, sender, app_data) -> None:  # pragma: no cover (needs mouse)
         if self.editing:
@@ -708,15 +719,25 @@ class HybridGrid:
     # -------------------------------------------------- per-cell handlers
 
 
-    def _on_cell_focus(self, sender, app_data, user_data) -> None:
+    def _on_cell_focus(self, sender, app_data, user_data) -> None:  # pragma: no cover (needs mouse)
         if self._shift_select:
             return                       # mid Shift-drag: keep the rectangle, ignore the focus
         if not self.editing:
-            self.model.cursor = user_data
-            self.model.anchor = user_data
+            self._focus_cell(user_data, extend=self._shift_down())
+
+    def _focus_cell(self, cell, *, extend: bool) -> None:
+        """A click landed on ``cell``. Normally that moves the cursor and drops
+        any selection; with Shift held it instead EXTENDS the selection from the
+        existing anchor to ``cell`` (Shift+click range-select — reliable, needs
+        no pixel geometry). Split out from the DPG callback so it's testable."""
+        self.model.cursor = cell
+        if extend:
+            self.model.selection = self.model._norm(self.model.anchor, cell)
+        else:
+            self.model.anchor = cell
             self.model.selection = None
-            self._paint_cursor()
-            self._update_bar()
+        self._paint_cursor()
+        self._update_bar()
 
     def _on_cell_commit(self, sender, app_data, user_data) -> None:
         r, c = user_data
@@ -739,7 +760,7 @@ class HybridGrid:
         # seconds even when the user isn't pressing keys.
         while dpg.is_dearpygui_running():
             self._tick_status()
-            self._tick_cursor()
+            self._tick_shift_hint()
             dpg.render_dearpygui_frame()
         dpg.destroy_context()
 

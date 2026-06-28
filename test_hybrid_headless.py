@@ -434,3 +434,20 @@ def test_shift_focus_guard_keeps_selection(ctx):
     g._shift_drag_to((1, 1))
     g._on_cell_focus(None, None, (0, 0))            # a Shift-press focus mid-drag
     assert m.selection == ((0, 0), (1, 1))          # selection survives (not cleared)
+
+
+
+# ---------------------------------------------- Shift+click range select (reliable)
+def test_shift_click_extends_selection(ctx):
+    g, m, sh = _grid([])
+    g._focus_cell((0, 0), extend=False)             # plain click sets the anchor
+    assert m.cursor == (0, 0) and m.selection is None
+    g._focus_cell((2, 3), extend=True)              # shift-click extends to D3
+    assert m.selection == ((0, 0), (2, 3)) and m.cursor == (2, 3)
+
+
+def test_plain_click_clears_selection(ctx):
+    g, m, sh = _grid([])
+    m.selection = ((0, 0), (1, 1)); m.anchor = (0, 0); m.cursor = (1, 1)
+    g._focus_cell((3, 3), extend=False)             # a fresh plain click drops it
+    assert m.selection is None and m.cursor == (3, 3) and m.anchor == (3, 3)
