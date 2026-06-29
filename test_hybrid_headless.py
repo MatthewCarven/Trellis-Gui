@@ -8,7 +8,7 @@ import pytest
 import trellis_keymap as km
 from trellis import Workbook, read_csv
 
-from dpg_grid_hybrid import HybridGrid, cell_at
+from dpg_grid_hybrid import HybridGrid
 from grid_model import GridModel
 
 
@@ -397,18 +397,6 @@ def test_paste_clears_marquee(ctx):
 
 
 # ------------------------------------------------ Shift+drag rectangle selection
-def test_cell_at_hit_test():
-    rects = {
-        (0, 0): ((0, 0), (10, 10)),
-        (0, 1): ((10, 0), (20, 10)),
-        (1, 0): ((0, 10), (10, 20)),
-    }
-    assert cell_at((5, 5), rects) == (0, 0)
-    assert cell_at((15, 5), rects) == (0, 1)
-    assert cell_at((5, 15), rects) == (1, 0)
-    assert cell_at((50, 50), rects) is None        # outside every cell
-
-
 def test_shift_drag_selects_rectangle(ctx):
     g, m, sh = _grid([])
     g._begin_shift_select((0, 0))                   # Shift+press on A1
@@ -422,7 +410,8 @@ def test_shift_drag_selects_rectangle(ctx):
 
 def test_shift_drag_normalizes_backwards(ctx):
     g, m, sh = _grid([])
-    g._begin_shift_select((2, 2))                   # anchor at C3
+    m.anchor = (2, 2); m.cursor = (2, 2)            # a prior plain click anchored at C3
+    g._begin_shift_select((2, 2))                   # Shift extends from the anchor
     g._shift_drag_to((0, 0))                         # drag up-left to A1
     assert m.selection == ((0, 0), (2, 2))          # normalised rectangle
     g._end_shift_select()

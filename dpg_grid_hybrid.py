@@ -31,18 +31,6 @@ TABLE_HEIGHT = 400   # scrolls past this rather than growing the window forever
 MSG_FLASH_SECONDS = 3.0  # how long a copy/cut/paste status message stays up
 
 
-def cell_at(pos, rects):
-    """Pure hit-test: the (row, col) whose pixel rectangle contains ``pos`` (an
-    (x, y) point), or ``None``. ``rects`` maps (r, c) -> ((x0, y0), (x1, y1)).
-    Kept free of DearPyGui so the Shift+drag geometry is unit-testable without a
-    live mouse; the thin glue that reads real rects/positions lives on the grid."""
-    x, y = pos
-    for key, ((x0, y0), (x1, y1)) in rects.items():
-        if x0 <= x <= x1 and y0 <= y <= y1:
-            return key
-    return None
-
-
 class HybridGrid:
     TABLE = "hy_table"
     HOLDER = "hy_holder"
@@ -635,24 +623,13 @@ class HybridGrid:
         return bool(dpg.is_key_down(dpg.mvKey_LShift)
                     or dpg.is_key_down(dpg.mvKey_RShift))
 
-    def _visible_cell_rects(self) -> dict:  # pragma: no cover (needs live items)
-        rects = {}
-        w = self.model.window
-        for r in w.rows:
-            for c in w.cols:
-                tag = self.cell_tag(r, c)
-                if dpg.does_item_exist(tag):
-                    rects[(r, c)] = (tuple(dpg.get_item_rect_min(tag)),
-                                     tuple(dpg.get_item_rect_max(tag)))
-        return rects
-
-    def _cell_at_mouse(self):  # pragma: no cover (needs live mouse)
-        return cell_at(tuple(dpg.get_mouse_pos(local=False)), self._visible_cell_rects())
-
     def _begin_shift_select(self, cell) -> None:
+        # Extend from the EXISTING anchor (Excel's Shift behaviour): Shift+click
+        # and Shift+drag both grow the rectangle from the last plain click rather
+        # than resetting it. Plain drag (no Shift) draws a fresh box from the
+        # press — see _begin_mouse_select.
         self.model.cursor = cell
-        self.model.anchor = cell
-        self.model.selection = (cell, cell)
+        self.model.selection = self.model._norm(self.model.anchor, cell)
         self._shift_select = True
         self.refresh()
 
@@ -685,8 +662,8 @@ class HybridGrid:
     def _on_mouse_down(self, sender, app_data) -> None:  # pragma: no cover (needs mouse)
         if self.editing:
             return
-        if self._shift_down():                       # Shift -> draw a rectangle
-            cell = self._cell_at_mouse()
+        if self._shift_down():                       # Shift -> extend the selection
+            cell = self._cell_under_mouse()
             if cell is not None:
                 self._begin_shift_select(cell)
             return
@@ -700,7 +677,7 @@ class HybridGrid:
         if self.editing:
             return
         if self._shift_select:
-            cell = self._cell_at_mouse()
+            cell = self._cell_under_mouse()
             if cell is not None:
                 self._shift_drag_to(cell)
             return
