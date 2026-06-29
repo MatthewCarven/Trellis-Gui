@@ -119,10 +119,12 @@ the construction code and callbacks are exercised for real.
 - The cursor highlight theme and the formula-bar focus hand-off.
 - `is_key_down` modifier polling for `Ctrl+A` / `Ctrl+Home` (headless it reads
   no keys down, so those paths are tested via the model, not through DPG).
-- Mouse selection: the selection math (plain drag draws, Shift+click/drag extend
-  from the anchor) is unit-tested via the model, but the live hover hit-test
-  (`is_item_hovered`), the Shift poll, and the status-bar hint need eyeballing on
-  a real viewport.
+- Mouse selection: the selection math (Shift+click/drag extend from the anchor)
+  is unit-tested via the model. On a real viewport, Shift+click extends as
+  intended; a drag does NOT paint across cells, because DPG reports hover only for
+  the pressed cell mid-drag — so only the press registers. Shift+click is the
+  group-select; click-drag-to-paint is a known gap (would need a verified
+  pixel→cell mapping or an overlay).
 
 ## Ergonomic questions this spike is meant to surface
 
@@ -139,11 +141,12 @@ the construction code and callbacks are exercised for real.
   dialog), copy/cut/paste (`Ctrl+C`/`X`/`V`, formulas shift on paste; the source
   region is marked until paste or `Esc` — an amber tint for copy, dimmed for cut —
   and a coordinate flash like "Copied A1:B2" appears in the status bar for a few
-  seconds), mouse selection — drag to draw a selection box, and Shift+click or
-  Shift+drag to extend it from the anchor (all via DPG's hover hit-test, which
-  works over the editable cells); while Shift is held the status bar shows a hint,
-  since DearPyGui 2.x exposes no settable mouse cursor for a crosshair — with a
-  visible selection rectangle, Open/New (`Ctrl+O`/`Ctrl+N`) plus a File menu, and
+  seconds), mouse selection — Shift+click a cell to extend the selection from the
+  active cell out to it (the reliable group-select); a plain click/drag just sets
+  the active cell. (DearPyGui doesn't report hover on the other cells mid-drag, so
+  click-drag-to-paint isn't wired up — Shift+click covers ranges instead; and DPG
+  2.x has no settable mouse cursor, so a status-bar hint shows while Shift is
+  held.) The selection paints as a visible rectangle. Open/New (`Ctrl+O`/`Ctrl+N`) plus a File menu, and
   multi-sheet tabs (`Ctrl+W` closes, with an unsaved-changes guard). All tabs share
   one Workbook, so a formula can reference another sheet by name (`=Sheet2!A1`) and
   the shared recalc keeps it live; each tab's caption shows its sheet name with a
