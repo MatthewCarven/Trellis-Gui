@@ -71,6 +71,8 @@ class HybridGrid:
         self._marquee = None        # (rect, mode) of the clipboard source, or None
         self._pending = None        # a deferred action awaiting the unsaved-changes modal
         self._built_dims: tuple[int, int] | None = None
+        self._repaint_pending = False   # engine marked the grid dirty; repaint next frame
+        self._repaint_count = 0         # repaints actually performed (coalesced) — for tests
 
     def cell_tag(self, r: int, c: int) -> str:
         return f"hy_cell_{r}_{c}"
@@ -329,14 +331,28 @@ class HybridGrid:
         sheet.on("*", lambda event, **kw: self._on_engine_event(sheet))
 
     def _on_engine_event(self, sheet) -> None:
-        # Repaint only the visible grid, and never mid-edit (a repaint would
-        # fight the in-place editor). Swallow render errors: a handler exception
-        # propagates out of the engine's emit and would break the very write
-        # that triggered it.
+        # Coalesce: an engine change on the visible sheet marks the grid dirty;
+        # the repaint itself happens once per frame in _flush_repaint. A single
+        # edit that cascades to K dependents fires 1 cell:change + K cell:recalc
+        # events — without coalescing that was K+1 full-grid repaints in one
+        # burst; now it collapses to one. Never react mid-edit (a repaint would
+        # fight the in-place editor) or for an off-screen sheet.
         if self.editing or sheet is not self.model.sheet:
             return
+        self._repaint_pending = True
+
+    def _flush_repaint(self) -> None:
+        """Repaint at most once if the engine marked the grid dirty since the
+        last frame (see _on_engine_event). Driven by the render loop. Skips
+        mid-edit, leaving the request pending so it lands once editing ends.
+        Swallows render errors: a handler exception would otherwise propagate
+        out of the engine emit and break the write that triggered it."""
+        if not self._repaint_pending or self.editing:
+            return
+        self._repaint_pending = False
         try:
             self.refresh()
+            self._repaint_count += 1
         except Exception:
             pass
 
@@ -509,6 +525,7 @@ class HybridGrid:
         self._selecting = False
         self._highlighted = []
         self._built_dims = None      # force a full rebuild for the new sheet
+        self._repaint_pending = False   # a full rebuild subsumes any pending flush
         self.refresh()
 
     def _on_tab_changed(self, sender, app_data) -> None:
@@ -738,6 +755,7 @@ class HybridGrid:
         while dpg.is_dearpygui_running():
             self._tick_status()
             self._tick_shift_hint()
+            self._flush_repaint()
             dpg.render_dearpygui_frame()
         dpg.destroy_context()
 

@@ -322,17 +322,46 @@ def test_status_message_flashes_then_expires(ctx):
 def test_active_grid_repaints_live_on_engine_change(ctx):
     g, m, sh = _grid([("A1", 10)])
     sh["A1"] = 99                                   # mutate the engine directly (REPL-style)
-    assert dpg.get_value(g.cell_tag(0, 0)) == "99"  # grid repainted with no explicit refresh()
+    assert g._repaint_pending is True               # coalesced: marked dirty, not yet painted
+    g._flush_repaint()                              # one frame tick
+    assert dpg.get_value(g.cell_tag(0, 0)) == "99"  # grid repaints live on the next frame
+
+
+def test_engine_events_coalesce_into_one_repaint(ctx):
+    # A1=A2=...=A5, so one edit to A5 cascades upward: 1 cell:change + several
+    # cell:recalc events. Coalescing collapses that burst into a single repaint
+    # on the next frame instead of one full refresh() per event.
+    g, m, sh = _grid([("A1", "=A2"), ("A2", "=A3"), ("A3", "=A4"),
+                      ("A4", "=A5"), ("A5", 1)])
+    n = {"c": 0}
+    orig = g.refresh
+
+    def counting_refresh():
+        n["c"] += 1
+        orig()
+
+    g.refresh = counting_refresh
+    sh["A5"] = 99                                   # one edit -> a cascade of engine events
+    assert n["c"] == 0                              # no synchronous per-event repaint
+    assert g._repaint_pending is True               # just the dirty flag
+    g._flush_repaint()                              # one frame tick
+    assert n["c"] == 1                              # exactly one repaint for the whole cascade
+    assert g._repaint_pending is False
+    assert dpg.get_value(g.cell_tag(0, 0)) == "99"  # propagated value is visible
+    g._flush_repaint()                              # nothing pending -> no extra repaint
+    assert n["c"] == 1
 
 
 def test_cross_sheet_dependent_repaints_live_when_its_sheet_active(ctx):
     g, m, sh1 = _grid([("A1", 10)])
     g._new()                                        # Sheet2 active
     g.model.commit(0, 0, "=Sheet1!A1")              # Sheet2!A1 -> 10
+    g._flush_repaint()
     assert dpg.get_value(g.cell_tag(0, 0)) == "10"
     # change Sheet1!A1 while Sheet2 is the visible tab; the recalc cascade lands
-    # on Sheet2!A1, which is on screen -> it repaints live, no tab switch
+    # on Sheet2!A1, which is on screen -> it repaints live (next frame), no tab switch
     g.wb["Sheet1"]["A1"] = 42
+    g._flush_repaint()
     assert dpg.get_value(g.cell_tag(0, 0)) == "42"
 
 

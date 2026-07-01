@@ -107,7 +107,7 @@ Frictions variant B (and so C) surfaces (the point of the exercise — eyeball t
 
 ## What's verified vs. what to check on first run
 
-**Verified headlessly (98 tests, no GPU):** the model logic, the commit policy,
+**Verified headlessly (99 tests, no GPU):** the model logic, the commit policy,
 **recalc propagation showing up in the grid** (both variants), the keymap driving
 the cursor, type-to-edit seeding, the window growing to cover new far cells, and
 variant B's full modal flow (F2/type begins, Enter/Tab commit + move, Esc
@@ -153,7 +153,9 @@ the construction code and callbacks are exercised for real.
   `*` dirty marker. The visible grid repaints live when the engine changes
   underneath it — a cross-sheet recalc cascade landing on the active sheet, or a
   direct edit to the same objects from a REPL (the library-first thesis), shows up
-  without a manual refresh.
+  without a manual refresh. A cascade's burst of cell events is coalesced into one
+  repaint on the next frame, so a large recalc costs a single grid repaint rather
+  than one per changed cell.
 
 ## Status
 
