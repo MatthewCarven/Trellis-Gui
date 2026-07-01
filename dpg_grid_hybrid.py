@@ -178,6 +178,7 @@ class HybridGrid:
                         tag = self.cell_tag(r, c)
                         dpg.add_input_text(
                             tag=tag, width=-1, default_value=self.model.display(r, c),
+                            readonly=True,   # READY: a click selects, no editable caret
                             callback=self._mirror_to_bar,
                         )
                         with dpg.item_handler_registry() as reg:
@@ -404,11 +405,19 @@ class HybridGrid:
 
 
     # ------------------------------------------------------------- editing
+    def _lock_cell(self, r: int, c: int) -> None:
+        """Return a cell to READY (read-only) after an edit ends, so a later
+        plain click selects it instead of planting an editable caret."""
+        tag = self.cell_tag(r, c)
+        if dpg.does_item_exist(tag):
+            dpg.configure_item(tag, readonly=True)
+
     def _begin_edit(self, *, seed: str | None) -> None:
         r, c = self.model.cursor
         self.editing = True
         text = seed if seed is not None else self.model.edit_text(r, c)
         tag = self.cell_tag(r, c)
+        dpg.configure_item(tag, readonly=False)   # unlock just this cell to edit it
         dpg.set_value(tag, text)
         dpg.set_value(self.BAR, text)
         dpg.focus_item(tag)
@@ -419,12 +428,14 @@ class HybridGrid:
         r, c = self.model.cursor
         self.model.commit(r, c, dpg.get_value(self.cell_tag(r, c)))
         self.editing = False
+        self._lock_cell(r, c)
 
     def _cancel_active(self) -> None:
         r, c = self.model.cursor
         self.editing = False
         if dpg.does_item_exist(self.cell_tag(r, c)):
             dpg.set_value(self.cell_tag(r, c), self.model.display(r, c))
+            self._lock_cell(r, c)
         self.refresh()
 
     def _after_move(self) -> None:
@@ -737,6 +748,7 @@ class HybridGrid:
         r, c = user_data
         self.model.commit(r, c, dpg.get_value(self.cell_tag(r, c)))
         self.editing = False
+        self._lock_cell(r, c)
         self.refresh()
 
     def _on_cell_blur(self, sender, app_data, user_data) -> None:

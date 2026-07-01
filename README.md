@@ -100,14 +100,17 @@ Frictions variant B (and so C) surfaces (the point of the exercise — eyeball t
 - **Type-to-replace timing.** A printable in READY seeds the cell with that char;
   whether DPG also delivers the keystroke natively (doubling it) is the kind of
   thing only a live run shows.
-- **Click gives a caret.** Because every cell is an editable `input_text`,
-  clicking one shows a text caret, so a click-then-type edits in place even
-  without F2 — unlike Excel's single-click-selects. A real build might use
-  read-only display widgets + an overlaid editor to control this precisely.
+- **Click gives a caret — addressed.** Cells were editable `input_text`s, so a
+  click planted a text caret and click-then-type edited in place without F2
+  (unlike Excel's single-click-selects). Display cells are now read-only in
+  READY; only the cursor cell is unlocked when an edit begins (F2/Enter/typing)
+  and re-locked on commit or cancel, so a click selects rather than edits.
+  Click-to-select rides the mouse-down hit-test, so it holds whether or not DPG
+  fires activation on a read-only cell.
 
 ## What's verified vs. what to check on first run
 
-**Verified headlessly (99 tests, no GPU):** the model logic, the commit policy,
+**Verified headlessly (104 tests, no GPU):** the model logic, the commit policy,
 **recalc propagation showing up in the grid** (both variants), the keymap driving
 the cursor, type-to-edit seeding, the window growing to cover new far cells, and
 variant B's full modal flow (F2/type begins, Enter/Tab commit + move, Esc

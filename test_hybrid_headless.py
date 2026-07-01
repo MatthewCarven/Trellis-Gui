@@ -469,3 +469,42 @@ def test_plain_click_clears_selection(ctx):
     m.selection = ((0, 0), (1, 1)); m.anchor = (0, 0); m.cursor = (1, 1)
     g._focus_cell((3, 3), extend=False)             # a fresh plain click drops it
     assert m.selection is None and m.cursor == (3, 3) and m.anchor == (3, 3)
+
+
+# ------------------------------------------- read-only until an edit begins
+def test_cells_start_readonly(ctx):
+    g, m, sh = _grid([("A1", 10), ("A2", 5)])
+    # Every display cell is read-only in READY, so a plain click selects rather
+    # than planting an editable caret (F2/typing is what edits).
+    assert dpg.get_item_configuration(g.cell_tag(0, 0))["readonly"] is True
+    assert dpg.get_item_configuration(g.cell_tag(1, 0))["readonly"] is True
+
+
+def test_edit_unlocks_only_the_cursor_cell(ctx):
+    g, m, sh = _grid([("A1", 10), ("A2", 5)])
+    g._on_key(None, dpg.mvKey_F2)                    # begin editing A1
+    assert g.editing is True
+    assert dpg.get_item_configuration(g.cell_tag(0, 0))["readonly"] is False
+    assert dpg.get_item_configuration(g.cell_tag(1, 0))["readonly"] is True
+
+
+def test_type_to_edit_unlocks_cell(ctx):
+    g, m, sh = _grid([])
+    g._on_key(None, dpg.mvKey_K)                     # a printable seeds an edit
+    assert g.editing is True
+    assert dpg.get_item_configuration(g.cell_tag(0, 0))["readonly"] is False
+
+
+def test_commit_relocks_cell(ctx):
+    g, m, sh = _grid([("A1", 10)])
+    g._on_key(None, dpg.mvKey_F2)
+    dpg.set_value(g.cell_tag(0, 0), "20")
+    g._on_key(None, dpg.mvKey_Return)               # Enter commits + moves
+    assert dpg.get_item_configuration(g.cell_tag(0, 0))["readonly"] is True
+
+
+def test_escape_relocks_cell(ctx):
+    g, m, sh = _grid([("A1", 10)])
+    g._on_key(None, dpg.mvKey_F2)
+    g._on_key(None, dpg.mvKey_Escape)               # Esc cancels
+    assert dpg.get_item_configuration(g.cell_tag(0, 0))["readonly"] is True
