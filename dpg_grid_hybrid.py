@@ -44,9 +44,14 @@ class HybridGrid:
     CONFIRM = "hy_confirm"
     TABBAR = "hy_tabbar"
 
-    def __init__(self, model: GridModel):
+    def __init__(self, model: GridModel, keymap: "km.Keymap | None" = None):
         self.model = model
         self.models = [model]   # one GridModel per sheet tab; self.model is the active one
+        # ONE keymap instance for the whole session, not one per keypress. A
+        # stateful keymap (vim's pending counts / operators / the ``:`` line)
+        # only keeps its parse state between keystrokes if it persists. Defaults
+        # to the stateless ExcelKeymap, so one-instance vs per-key is identical.
+        self.keymap = keymap if keymap is not None else km.ExcelKeymap()
         # The ONE workbook every tab's sheet lives in. Sharing it is what makes
         # cross-sheet refs (``=Sheet2!A1``) and the engine's shared recalc work
         # across tabs. Falls back to a fresh book if the model wasn't given one
@@ -388,7 +393,7 @@ class HybridGrid:
             return
         if kp.key == "escape":
             self._cancel_clipboard()   # cancel a pending copy/cut (marquee + clipboard)
-        action = km.ExcelKeymap().handle(kp, self.model.key_context())
+        action = self.keymap.handle(kp, self.model.key_context())
         intent = self.model.apply_action(action)
         if intent and intent[0] == "edit":
             self._begin_edit(seed=intent[3])
@@ -760,11 +765,34 @@ class HybridGrid:
         dpg.destroy_context()
 
 
+def _select_keymap(argv: list[str]) -> "tuple[km.Keymap, list[str]]":
+    """Pull a ``--vim`` / ``--keymap NAME`` selection out of argv and return
+    (keymap instance, remaining argv). ``--vim`` is sugar for ``--keymap vim``.
+    The default is the built-in Excel language; an unknown name raises KeyError
+    (``load_keymap`` lists what is available). Kept separate so load_model's
+    file-arg parsing is untouched."""
+    rest: list[str] = []
+    name: str | None = None
+    it = iter(argv)
+    for a in it:
+        if a == "--vim":
+            name = "vim"
+        elif a == "--keymap":
+            name = next(it, None)
+        elif a.startswith("--keymap="):
+            name = a.split("=", 1)[1]
+        else:
+            rest.append(a)
+    keymap = km.load_keymap(name) if name else km.ExcelKeymap()
+    return keymap, rest
+
+
 def main(argv: list[str] | None = None) -> None:  # pragma: no cover
     argv = sys.argv[1:] if argv is None else argv
+    keymap, argv = _select_keymap(argv)
     model = load_model(argv)
     dpg.create_context()
-    grid = HybridGrid(model)
+    grid = HybridGrid(model, keymap=keymap)
     with dpg.window(tag="primary", menubar=True):
         grid.build("primary")
     grid.run()

@@ -107,7 +107,7 @@ Frictions variant B (and so C) surfaces (the point of the exercise — eyeball t
 
 ## What's verified vs. what to check on first run
 
-**Verified headlessly (99 tests, no GPU):** the model logic, the commit policy,
+**Verified headlessly (102 tests, no GPU):** the model logic, the commit policy,
 **recalc propagation showing up in the grid** (both variants), the keymap driving
 the cursor, type-to-edit seeding, the window growing to cover new far cells, and
 variant B's full modal flow (F2/type begins, Enter/Tab commit + move, Esc
@@ -183,9 +183,10 @@ It depends only on the published `trellis` + `trellis-keymap` + `trellis-undo`.
 **Open — vim support, the shell half.** The model is ready; what remains is the DearPyGui shell
 (`dpg_grid_hybrid.py`):
 
-- Hold ONE keymap instance via `trellis_keymap.load_keymap(name)` instead of constructing
-  `ExcelKeymap()` per keypress (a stateful keymap needs its parse state to persist), set from a
-  new `--keymap NAME` / `--vim` CLI flag.
+- **DONE — one keymap instance + CLI selection.** `HybridGrid(model, keymap=…)` now holds a single
+  keymap for the session instead of constructing `ExcelKeymap()` per keypress (so a stateful keymap
+  keeps its parse state); `_select_keymap` parses `--keymap NAME` / `--vim` (sugar) and resolves via
+  `trellis_keymap.load_keymap`. Default stays Excel, so behaviour is unchanged.
 - Show the keymap mode in the bar (`-- NORMAL --` / `-- INSERT --` / `-- VISUAL --`, and
   `model.hint` while in command mode) instead of just `[READY]`/`[EDIT]`.
 - Wire the `("save", ...)` / `("quit", ...)` intents returned from `apply_action` to the shell's

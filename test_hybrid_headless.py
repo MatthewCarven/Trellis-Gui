@@ -469,3 +469,43 @@ def test_plain_click_clears_selection(ctx):
     m.selection = ((0, 0), (1, 1)); m.anchor = (0, 0); m.cursor = (1, 1)
     g._focus_cell((3, 3), extend=False)             # a fresh plain click drops it
     assert m.selection is None and m.cursor == (3, 3) and m.anchor == (3, 3)
+
+
+# ------------------------------------------------ selectable keymap (vim step 1)
+def test_keymap_defaults_to_excel_single_instance(ctx):
+    g, m, sh = _grid([("A1", 1)])
+    assert isinstance(g.keymap, km.ExcelKeymap)
+    first = g.keymap
+    g._on_key(None, dpg.mvKey_Down)
+    g._on_key(None, dpg.mvKey_Up)
+    assert g.keymap is first           # one instance for the session, not rebuilt per keypress
+
+
+def test_injected_keymap_drives_keys(ctx):
+    calls = []
+
+    class StubKeymap:
+        name = "stub"
+        def initial_mode(self): return "default"
+        def handle(self, key, ctx): calls.append(key.key); return km.Move(1, 0)
+        def key_table(self): return []
+
+    wb = Workbook(); sh = wb.add_sheet("Sheet1"); sh["A1"] = 1
+    g = HybridGrid(GridModel(sh, workbook=wb), keymap=StubKeymap())
+    with dpg.window(tag="primary"):
+        g.build("primary")
+    g._on_key(None, dpg.mvKey_X)
+    assert calls == ["x"]              # keys route through the injected keymap
+    assert g.model.cursor == (1, 0)    # and its returned Move is applied
+
+
+def test_select_keymap_parses_flags():
+    from dpg_grid_hybrid import _select_keymap
+    kmp, rest = _select_keymap(["demo.csv"])
+    assert isinstance(kmp, km.ExcelKeymap) and rest == ["demo.csv"]      # default = Excel
+    kmp, rest = _select_keymap(["--keymap", "excel", "f.csv"])
+    assert isinstance(kmp, km.ExcelKeymap) and rest == ["f.csv"]         # built-in, flag stripped
+    kmp, rest = _select_keymap(["--keymap=excel"])
+    assert isinstance(kmp, km.ExcelKeymap) and rest == []
+    with pytest.raises(KeyError):
+        _select_keymap(["--keymap", "nope"])                            # unknown -> KeyError (lists available)
